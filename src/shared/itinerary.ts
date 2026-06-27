@@ -62,8 +62,10 @@ export interface ItineraryDay {
 
 export interface RouteSegment {
   dayIndex: number;
+  toDayIndex?: number;
   fromStopId: string;
   toStopId: string;
+  isInterDay?: boolean;
   mode: RouteMode;
   status: RouteStatus;
   distanceMeters?: number;
@@ -242,10 +244,16 @@ export function removeStopFromItinerary(itinerary: Itinerary, stopId: string): I
 
   next.alternatives = relabelStops(next.alternatives.filter((stop) => stop.id !== stopId), 0, true);
   next.routeSegments = affectedMainDay
-    ? next.routeSegments.filter((segment) => segment.dayIndex !== affectedMainDay)
+    ? next.routeSegments.filter((segment) => !routeSegmentTouchesDay(segment, affectedMainDay))
     : next.routeSegments;
   next.updatedAt = new Date().toISOString();
   return next;
+}
+
+function routeSegmentTouchesDay(segment: RouteSegment, dayIndex: number): boolean {
+  if (segment.dayIndex === dayIndex || segment.toDayIndex === dayIndex) return true;
+  if (!segment.isInterDay) return false;
+  return segment.dayIndex === dayIndex - 1;
 }
 
 function relabelStops(stops: Stop[], dayIndex: number, alternative: boolean): Stop[] {

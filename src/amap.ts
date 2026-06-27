@@ -34,6 +34,7 @@ export async function enrichItineraryWithAmap(
   AMap: AMapNamespace,
   itinerary: Itinerary,
   routePreference: RoutePreference = 'auto',
+  connectDays = false,
   onProgress?: (message: string) => void
 ): Promise<Itinerary> {
   const next: Itinerary = structuredClone(itinerary);
@@ -55,29 +56,77 @@ export async function enrichItineraryWithAmap(
   }
 
   const existingSegments = new Map(
-    next.routeSegments.map((segment) => [routeSegmentKey(segment.dayIndex, segment.fromStopId, segment.toStopId), segment])
+    next.routeSegments.map((segment) => [routeSegmentKey(segment), segment])
   );
   const routeSegments: RouteSegment[] = [];
-  for (const day of next.days) {
-    for (let index = 0; index < day.stops.length - 1; index += 1) {
-      const from = day.stops[index];
-      const to = day.stops[index + 1];
-      const existing = existingSegments.get(routeSegmentKey(day.dayIndex, from.id, to.id));
-      if (existing) {
-        routeSegments.push(existing);
-        continue;
-      }
-      onProgress?.(`规划路线 ${from.label} → ${to.label}`);
-      routeSegments.push(await planRoute(AMap, day.dayIndex, from, to, routePreference));
+  for (const plan of buildRoutePlans(next.days, connectDays)) {
+    const existing = existingSegments.get(routeSegmentKey(plan));
+    if (existing) {
+      routeSegments.push(existing);
+      continue;
     }
+    onProgress?.(
+      plan.isInterDay
+        ? `规划跨天路线 D${plan.dayIndex} → D${plan.toDayIndex}: ${plan.from.label} → ${plan.to.label}`
+        : `规划路线 ${plan.from.label} → ${plan.to.label}`
+    );
+    routeSegments.push(await planRoute(AMap, plan, routePreference));
   }
   next.routeSegments = routeSegments;
   next.updatedAt = new Date().toISOString();
   return next;
 }
 
-function routeSegmentKey(dayIndex: number, fromStopId: string, toStopId: string): string {
-  return `${dayIndex}:${fromStopId}->${toStopId}`;
+interface RoutePlan {
+  dayIndex: number;
+  toDayIndex?: number;
+  fromStopId: string;
+  toStopId: string;
+  from: Stop;
+  to: Stop;
+  isInterDay?: boolean;
+}
+
+function buildRoutePlans(days: Itinerary['days'], connectDays: boolean): RoutePlan[] {
+  const plans: RoutePlan[] = [];
+  for (const day of days) {
+    for (let index = 0; index < day.stops.length - 1; index += 1) {
+      const from = day.stops[index];
+      const to = day.stops[index + 1];
+      plans.push({
+        dayIndex: day.dayIndex,
+        fromStopId: from.id,
+        toStopId: to.id,
+        from,
+        to
+      });
+    }
+  }
+
+  if (connectDays) {
+    const routeDays = days.filter((day) => day.stops.length > 0);
+    for (let index = 0; index < routeDays.length - 1; index += 1) {
+      const fromDay = routeDays[index];
+      const toDay = routeDays[index + 1];
+      const from = fromDay.stops[fromDay.stops.length - 1];
+      const to = toDay.stops[0];
+      plans.push({
+        dayIndex: fromDay.dayIndex,
+        toDayIndex: toDay.dayIndex,
+        fromStopId: from.id,
+        toStopId: to.id,
+        from,
+        to,
+        isInterDay: true
+      });
+    }
+  }
+
+  return plans;
+}
+
+function routeSegmentKey(segment: Pick<RouteSegment, 'dayIndex' | 'toDayIndex' | 'fromStopId' | 'toStopId' | 'isInterDay'>): string {
+  return `${segment.isInterDay ? 'inter' : 'day'}:${segment.dayIndex}-${segment.toDayIndex || segment.dayIndex}:${segment.fromStopId}->${segment.toStopId}`;
 }
 
 function matchStop(
@@ -297,18 +346,19 @@ function getDistinctStopCities(itinerary: Itinerary): Set<string> {
 
 async function planRoute(
   AMap: AMapNamespace,
-  dayIndex: number,
-  from: Stop,
-  to: Stop,
+  plan: RoutePlan,
   routePreference: RoutePreference
 ): Promise<RouteSegment> {
+  const { dayIndex, toDayIndex, from, to, fromStopId, toStopId, isInterDay } = plan;
   const start = from.poiMatch?.location;
   const end = to.poiMatch?.location;
   if (!start || !end) {
     return {
       dayIndex,
-      fromStopId: from.id,
-      toStopId: to.id,
+      toDayIndex,
+      fromStopId,
+      toStopId,
+      isInterDay,
       mode: 'straight',
       status: 'failed',
       path: []
@@ -326,8 +376,10 @@ async function planRoute(
   if (planned.path.length > 1) {
     return {
       dayIndex,
-      fromStopId: from.id,
-      toStopId: to.id,
+      toDayIndex,
+      fromStopId,
+      toStopId,
+      isInterDay,
       mode,
       status: 'complete',
       distanceMeters: planned.distanceMeters || directDistance,
@@ -338,8 +390,10 @@ async function planRoute(
 
   return {
     dayIndex,
-    fromStopId: from.id,
-    toStopId: to.id,
+    toDayIndex,
+    fromStopId,
+    toStopId,
+    isInterDay,
     mode: 'straight',
     status: 'fallback',
     distanceMeters: directDistance,

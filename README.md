@@ -45,6 +45,7 @@ npm run dev
 - 解析结果包含 `tripScope`，用于区分单城市、多城市或不确定行程，辅助高德 POI 匹配。
 - 浏览器端使用高德 JSAPI 匹配 POI 和规划路线。
 - 按天分色显示 Marker 和路线，短距离使用步行，失败时直线兜底。
+- 可切换驾车、公交、步行或自动路线，并支持跨天连接自驾环线。
 - 生成 `/s/:id` 分享页，数据保存在本地 SQLite 数据库 `data/map-tour.sqlite`。
 - OpenAI key 和高德安全密钥只在服务端使用；前端只拿高德 JSAPI key。
 

@@ -1,4 +1,4 @@
-import { BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, Loader2, MapPinned, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
+import { BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
 import { enrichItineraryWithAmap, loadAMap } from './amap';
 import { getConfig, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
@@ -62,6 +62,7 @@ export function App() {
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
   const [routePreference, setRoutePreference] = useState<RoutePreference>('auto');
+  const [connectDays, setConnectDays] = useState(false);
   const [showMapLabels, setShowMapLabels] = useState(true);
   const [parseStatus, setParseStatus] = useState('');
   const [isParsing, setIsParsing] = useState(false);
@@ -120,6 +121,7 @@ export function App() {
       setItinerary(result.itinerary);
       setActiveDay('all');
       setRoutePreference('auto');
+      setConnectDays(false);
       setSelectedStopId(null);
       setParseStatus(result.warning || '');
     } catch (err) {
@@ -171,6 +173,19 @@ export function App() {
       : current);
   }
 
+  function handleConnectDaysChange(nextConnectDays: boolean) {
+    setConnectDays(nextConnectDays);
+    setSelectedStopId(null);
+    setActiveDay('all');
+    setItinerary((current) => current
+      ? {
+          ...current,
+          routeSegments: [],
+          updatedAt: new Date().toISOString()
+        }
+      : current);
+  }
+
   function handleStopDelete(stopId: string) {
     setSelectedStopId(null);
     setItinerary((current) => (current ? removeStopFromItinerary(current, stopId) : current));
@@ -191,6 +206,8 @@ export function App() {
             onDayChange={setActiveDay}
             routePreference={routePreference}
             onRoutePreferenceChange={handleRoutePreferenceChange}
+            connectDays={connectDays}
+            onConnectDaysChange={handleConnectDaysChange}
             showMapLabels={showMapLabels}
             onShowMapLabelsChange={setShowMapLabels}
             onShare={handleShare}
@@ -212,6 +229,7 @@ export function App() {
           onDayChange={setActiveDay}
           onItineraryChange={setItinerary}
           routePreference={routePreference}
+          connectDays={connectDays}
           showMapLabels={showMapLabels}
           selectedStopId={selectedStopId}
           onStopSelect={setSelectedStopId}
@@ -377,6 +395,8 @@ function ItineraryPanel({
   onDayChange,
   routePreference,
   onRoutePreferenceChange,
+  connectDays,
+  onConnectDaysChange,
   showMapLabels,
   onShowMapLabelsChange,
   onShare,
@@ -392,6 +412,8 @@ function ItineraryPanel({
   onDayChange: (day: ActiveDay) => void;
   routePreference: RoutePreference;
   onRoutePreferenceChange: (preference: RoutePreference) => void;
+  connectDays: boolean;
+  onConnectDaysChange: (connectDays: boolean) => void;
   showMapLabels: boolean;
   onShowMapLabelsChange: (show: boolean) => void;
   onShare: () => void;
@@ -418,6 +440,8 @@ function ItineraryPanel({
       <MapDisplayControls
         routePreference={routePreference}
         onRoutePreferenceChange={onRoutePreferenceChange}
+        connectDays={connectDays}
+        onConnectDaysChange={onConnectDaysChange}
         showMapLabels={showMapLabels}
         onShowMapLabelsChange={onShowMapLabelsChange}
         allowRouteChange={!readOnly}
@@ -534,12 +558,16 @@ const routeModeOptions: Array<{
 function MapDisplayControls({
   routePreference,
   onRoutePreferenceChange,
+  connectDays,
+  onConnectDaysChange,
   showMapLabels,
   onShowMapLabelsChange,
   allowRouteChange
 }: {
   routePreference: RoutePreference;
   onRoutePreferenceChange: (preference: RoutePreference) => void;
+  connectDays: boolean;
+  onConnectDaysChange: (connectDays: boolean) => void;
   showMapLabels: boolean;
   onShowMapLabelsChange: (show: boolean) => void;
   allowRouteChange: boolean;
@@ -565,6 +593,15 @@ function MapDisplayControls({
               );
             })}
           </div>
+          <button
+            className={`inter-day-toggle ${connectDays ? 'active' : ''}`}
+            type="button"
+            aria-pressed={connectDays}
+            onClick={() => onConnectDaysChange(!connectDays)}
+          >
+            <RouteIcon size={15} />
+            跨天连接
+          </button>
         </div>
       )}
       <label className="map-label-toggle">
@@ -760,6 +797,7 @@ function MapView({
   onDayChange,
   onItineraryChange,
   routePreference,
+  connectDays,
   showMapLabels,
   selectedStopId,
   onStopSelect,
@@ -770,6 +808,7 @@ function MapView({
   onDayChange: (day: ActiveDay) => void;
   onItineraryChange: (itinerary: Itinerary) => void;
   routePreference: RoutePreference;
+  connectDays: boolean;
   showMapLabels: boolean;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
@@ -833,11 +872,11 @@ function MapView({
   useEffect(() => {
     const AMap = amapRef.current;
     if (!mapReady || !AMap || !itinerary || readOnly || enrichingRef.current) return;
-    const expectedRouteCount = itinerary.days.reduce((total, day) => total + Math.max(day.stops.length - 1, 0), 0);
+    const expectedRouteCount = countExpectedRouteSegments(itinerary, connectDays);
     if (!hasPendingPoiMatches(itinerary) && itinerary.routeSegments.length >= expectedRouteCount) return;
 
     enrichingRef.current = true;
-    enrichItineraryWithAmap(AMap, itinerary, routePreference, setMapStatus)
+    enrichItineraryWithAmap(AMap, itinerary, routePreference, connectDays, setMapStatus)
       .then((next) => {
         onItineraryChange(next);
         setMapStatus('地点匹配和路线规划完成。');
@@ -846,7 +885,7 @@ function MapView({
       .finally(() => {
         enrichingRef.current = false;
       });
-  }, [itinerary, onItineraryChange, readOnly, mapReady, routePreference]);
+  }, [itinerary, onItineraryChange, readOnly, mapReady, routePreference, connectDays]);
 
   useEffect(() => {
     if (!mapStatus || mapError || !/完成/.test(mapStatus)) return;
@@ -903,6 +942,13 @@ function MapView({
   );
 }
 
+function countExpectedRouteSegments(itinerary: Itinerary, connectDays: boolean): number {
+  const inDaySegments = itinerary.days.reduce((total, day) => total + Math.max(day.stops.length - 1, 0), 0);
+  if (!connectDays) return inDaySegments;
+  const routeDays = itinerary.days.filter((day) => day.stops.length > 0);
+  return inDaySegments + Math.max(routeDays.length - 1, 0);
+}
+
 function getMapFitPadding(): [number, number, number, number] {
   if (!window.matchMedia('(max-width: 760px)').matches) {
     return [90, 90, 120, 90];
@@ -935,19 +981,23 @@ function drawItinerary(
   const dayIndexes = new Set(days.map((day) => day.dayIndex));
 
   for (const segment of itinerary.routeSegments) {
-    if (activeDay !== 'all' && segment.dayIndex !== activeDay) continue;
+    if (segment.isInterDay) {
+      if (activeDay !== 'all') continue;
+    } else if (activeDay !== 'all' && segment.dayIndex !== activeDay) {
+      continue;
+    }
     if (segment.path.length < 2) continue;
     const color = colorForDay(segment.dayIndex);
     const line = new AMap.Polyline({
       path: segment.path,
       strokeColor: color,
       strokeWeight: segment.mode === 'walking' ? 5 : segment.mode === 'transit' ? 6 : 7,
-      strokeOpacity: segment.status === 'fallback' ? 0.62 : 0.88,
-      strokeStyle: segment.status === 'fallback' || segment.mode === 'walking' ? 'dashed' : 'solid',
-      strokeDasharray: [10, 7],
+      strokeOpacity: segment.status === 'fallback' || segment.isInterDay ? 0.68 : 0.88,
+      strokeStyle: segment.status === 'fallback' || segment.mode === 'walking' || segment.isInterDay ? 'dashed' : 'solid',
+      strokeDasharray: segment.isInterDay ? [14, 9] : [10, 7],
       lineJoin: 'round',
       lineCap: 'round',
-      zIndex: 20
+      zIndex: segment.isInterDay ? 18 : 20
     });
     map.add(line);
     overlays.push(line);
