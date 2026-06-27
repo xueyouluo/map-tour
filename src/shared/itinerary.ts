@@ -86,6 +86,18 @@ export interface Itinerary {
   updatedAt?: string;
 }
 
+export interface ItinerarySummary {
+  id: string;
+  title: string;
+  language: string;
+  dateRange: DateRange;
+  tripScope?: TripScope;
+  daysCount: number;
+  stopCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ParsedStop {
   order?: number;
   name: string;

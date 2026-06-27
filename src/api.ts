@@ -1,4 +1,4 @@
-import type { Itinerary } from './shared/itinerary';
+import type { Itinerary, ItinerarySummary } from './shared/itinerary';
 
 export interface RuntimeConfig {
   amapKey: string;
@@ -92,6 +92,10 @@ export async function saveItinerary(itinerary: Itinerary): Promise<{ itinerary: 
 
 export async function loadItinerary(id: string): Promise<{ itinerary: Itinerary }> {
   return fetchJson(`/api/itineraries/${encodeURIComponent(id)}`);
+}
+
+export async function listItineraries(limit = 100): Promise<{ items: ItinerarySummary[] }> {
+  return fetchJson(`/api/itineraries?limit=${encodeURIComponent(String(limit))}`);
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

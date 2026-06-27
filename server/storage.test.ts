@@ -24,6 +24,24 @@ describe('ItineraryStore', () => {
     expect(loaded?.title).toBe('Test Trip');
     expect(loaded?.createdAt).toBeTruthy();
 
+    const second = normalizeParsedItinerary({
+      title: 'Second Trip',
+      days: [
+        {
+          title: 'Day 1',
+          stops: [{ name: 'A' }, { name: 'B' }],
+          alternatives: [{ name: 'C' }]
+        }
+      ],
+      alternatives: [{ name: 'D' }]
+    });
+    await store.save(second);
+    const summaries = await store.listSummaries();
+
+    expect(summaries).toHaveLength(2);
+    expect(summaries.map((item) => item.title)).toEqual(expect.arrayContaining(['Test Trip', 'Second Trip']));
+    expect(summaries.find((item) => item.title === 'Second Trip')?.stopCount).toBe(4);
+
     store.close();
     await rm(dir, { recursive: true, force: true });
   });

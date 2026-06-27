@@ -1,7 +1,7 @@
-import { BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, History as HistoryIcon, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
 import { enrichItineraryWithAmap, loadAMap } from './amap';
-import { getConfig, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
+import { getConfig, listItineraries, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
 import {
   colorForDay,
   getVisibleDays,
@@ -9,6 +9,7 @@ import {
   removeStopFromItinerary,
   type Itinerary,
   type ItineraryDay,
+  type ItinerarySummary,
   type RoutePreference,
   type Stop,
   type TripScope
@@ -57,7 +58,13 @@ function formatFileSize(size: number): string {
 }
 
 export function App() {
-  const shareId = useMemo(() => window.location.pathname.match(/^\/s\/([^/]+)/)?.[1], []);
+  const pathname = useMemo(() => window.location.pathname, []);
+  if (pathname === '/history') return <HistoryPage />;
+  return <MainApp pathname={pathname} />;
+}
+
+function MainApp({ pathname }: { pathname: string }) {
+  const shareId = useMemo(() => pathname.match(/^\/s\/([^/]+)/)?.[1], [pathname]);
   const readOnly = Boolean(shareId);
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
@@ -249,6 +256,90 @@ export function App() {
   );
 }
 
+function HistoryPage() {
+  const [items, setItems] = useState<ItinerarySummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let disposed = false;
+    listItineraries()
+      .then((result) => {
+        if (!disposed) setItems(result.items);
+      })
+      .catch((err) => {
+        if (!disposed) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  return (
+    <div className="history-page">
+      <header className="history-header">
+        <div className="brand-row">
+          <div className="brand-mark">
+            <MapPinned size={18} />
+          </div>
+          <span>RouteBrief</span>
+        </div>
+        <a className="header-link" href="/">
+          <ArrowLeft size={15} />
+          返回工具
+        </a>
+      </header>
+      <main className="history-main">
+        <section className="history-title">
+          <div className="history-title-icon">
+            <HistoryIcon size={22} />
+          </div>
+          <div>
+            <h1>历史行程</h1>
+            <p>这里显示已经生成过分享链接的行程，数据来自本地 SQLite。</p>
+          </div>
+        </section>
+
+        {loading && (
+          <div className="history-state">
+            <Loader2 className="spin" size={18} />
+            正在读取历史数据...
+          </div>
+        )}
+        {!loading && error && <div className="history-state error">{error}</div>}
+        {!loading && !error && items.length === 0 && (
+          <div className="history-state">还没有历史行程。生成并分享一次行程后，这里会出现记录。</div>
+        )}
+        {!loading && !error && items.length > 0 && (
+          <div className="history-grid">
+            {items.map((item) => (
+              <a className="history-card" key={item.id} href={`/s/${encodeURIComponent(item.id)}`}>
+                <div className="history-card-main">
+                  <h2>{item.title}</h2>
+                  <div className="date-line">
+                    <CalendarDays size={15} />
+                    <span>{formatHistoryDateRange(item)}</span>
+                  </div>
+                  <TripScopeLine scope={item.tripScope} />
+                </div>
+                <div className="history-card-meta">
+                  <span>{item.daysCount} 天</span>
+                  <span>{item.stopCount} 个地点</span>
+                  <span>更新于 {formatHistoryTime(item.updatedAt)}</span>
+                </div>
+                <ExternalLink size={17} />
+              </a>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 function PanelHeader({ readOnly }: { readOnly: boolean }) {
   return (
     <div className="panel-header">
@@ -257,6 +348,9 @@ function PanelHeader({ readOnly }: { readOnly: boolean }) {
           <MapPinned size={18} />
         </div>
         <span>RouteBrief</span>
+        <a className="header-link" href={readOnly ? '/' : '/history'}>
+          {readOnly ? '新建' : '历史'}
+        </a>
       </div>
       <h1>{readOnly ? '分享行程地图' : '行程转地图'}</h1>
       <p>{readOnly ? '按天查看路线、地点和备注。' : '粘贴文字、Markdown、表格，或上传行程截图。'}</p>
@@ -494,6 +588,21 @@ function formatTripScope(scope?: TripScope): string {
     : scope.primaryCity || '';
   if (scope.mode === 'single_city') return cityText ? `单城市 · ${cityText}` : '单城市';
   return cityText ? `多城市 · ${cityText}` : '多城市路线';
+}
+
+function formatHistoryDateRange(item: ItinerarySummary): string {
+  return item.dateRange.label || [item.dateRange.start, item.dateRange.end].filter(Boolean).join(' - ') || '日期未识别';
+}
+
+function formatHistoryTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未知时间';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
 }
 
 function ShareDialog({

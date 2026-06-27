@@ -123,6 +123,16 @@ app.post('/api/itineraries', async (req, res, next) => {
   }
 });
 
+app.get('/api/itineraries', async (req, res, next) => {
+  try {
+    const limit = Number(req.query.limit || 100);
+    const items = await store.listSummaries(limit);
+    res.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/itineraries/:id', async (req, res, next) => {
   try {
     const itinerary = await store.get(req.params.id);

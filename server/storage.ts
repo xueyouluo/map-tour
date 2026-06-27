@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Itinerary } from '../src/shared/itinerary';
+import type { Itinerary, ItinerarySummary } from '../src/shared/itinerary';
 
 export interface StoredItinerary extends Itinerary {
   id: string;
@@ -34,6 +34,14 @@ export class ItineraryStore {
       store[record.id] = record;
       return store;
     }, {});
+  }
+
+  async listSummaries(limit = 100): Promise<ItinerarySummary[]> {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 100, 1), 200);
+    const rows = this.database()
+      .prepare('select * from itineraries order by updated_at desc limit ?')
+      .all(safeLimit) as unknown as ItineraryRow[];
+    return rows.map(rowToSummary);
   }
 
   async get(id: string): Promise<StoredItinerary | null> {
@@ -143,5 +151,20 @@ function rowToRecord(row: ItineraryRow): StoredItinerary {
     id: row.id,
     createdAt: payload.createdAt || row.created_at,
     updatedAt: payload.updatedAt || row.updated_at
+  };
+}
+
+function rowToSummary(row: ItineraryRow): ItinerarySummary {
+  const record = rowToRecord(row);
+  return {
+    id: record.id,
+    title: record.title || 'Untitled itinerary',
+    language: record.language || 'auto',
+    dateRange: record.dateRange || {},
+    tripScope: record.tripScope,
+    daysCount: record.days.length,
+    stopCount: record.days.reduce((total, day) => total + day.stops.length + day.alternatives.length, 0) + record.alternatives.length,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
   };
 }
