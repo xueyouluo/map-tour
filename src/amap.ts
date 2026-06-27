@@ -38,7 +38,8 @@ export async function enrichItineraryWithAmap(
 ): Promise<Itinerary> {
   const next: Itinerary = structuredClone(itinerary);
   const cityLimitedSearch = shouldUseCityLimitedSearch(next);
-  const itineraryCity = cityLimitedSearch ? inferItineraryCity(next) : '';
+  const itineraryCity = inferItineraryCity(next);
+  const distinctStopCities = getDistinctStopCities(next);
   const mainStops = next.days.flatMap((day) => day.stops);
   const alternativeStops = [
     ...next.days.flatMap((day) => day.alternatives),
@@ -50,7 +51,7 @@ export async function enrichItineraryWithAmap(
     const stop = allStops[index];
     if (stop.poiMatch?.status === 'matched' || stop.poiMatch?.status === 'unmatched') continue;
     onProgress?.(`匹配地点 ${index + 1}/${allStops.length}: ${stop.name}`);
-    stop.poiMatch = await matchStop(AMap, stop, itineraryCity, cityLimitedSearch);
+    stop.poiMatch = await matchStop(AMap, stop, itineraryCity, next.tripScope, distinctStopCities, cityLimitedSearch);
   }
 
   const existingSegments = new Map(
@@ -83,19 +84,23 @@ function matchStop(
   AMap: AMapNamespace,
   stop: Stop,
   itineraryCity: string,
+  tripScope: Itinerary['tripScope'],
+  distinctStopCities: Set<string>,
   cityLimitedSearch: boolean
 ): Promise<PoiMatch> {
-  return matchStopWithRetry(AMap, stop, itineraryCity, cityLimitedSearch, 0);
+  return matchStopWithRetry(AMap, stop, itineraryCity, tripScope, distinctStopCities, cityLimitedSearch, 0);
 }
 
 async function matchStopWithRetry(
   AMap: AMapNamespace,
   stop: Stop,
   itineraryCity: string,
+  tripScope: Itinerary['tripScope'],
+  distinctStopCities: Set<string>,
   cityLimitedSearch: boolean,
   attempt: number
 ): Promise<PoiMatch> {
-  const searchCity = cityLimitedSearch ? stop.city || itineraryCity : '';
+  const searchCity = resolveSearchCity(stop, itineraryCity, tripScope, distinctStopCities, cityLimitedSearch);
   const placeSearch = new AMap.PlaceSearch({
     city: searchCity || undefined,
     citylimit: Boolean(searchCity),
@@ -146,13 +151,42 @@ async function matchStopWithRetry(
 
   if (isQpsLimitError(result.errorInfo, result.errorCode) && attempt < MAX_AMAP_RETRIES) {
     await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
-    return matchStopWithRetry(AMap, stop, itineraryCity, cityLimitedSearch, attempt + 1);
+    return matchStopWithRetry(AMap, stop, itineraryCity, tripScope, distinctStopCities, cityLimitedSearch, attempt + 1);
   }
 
   return result;
 }
 
+function resolveSearchCity(
+  stop: Stop,
+  itineraryCity: string,
+  tripScope: Itinerary['tripScope'],
+  distinctStopCities: Set<string>,
+  cityLimitedSearch: boolean
+): string {
+  const stopCity = stop.city?.trim() || '';
+  if (tripScope?.mode === 'single_city') {
+    return stopCity || tripScope.primaryCity || itineraryCity;
+  }
+
+  if (tripScope?.mode === 'multi_city') {
+    return shouldUseStopCityForMultiCity(stopCity, tripScope.cities || [], distinctStopCities) ? stopCity : '';
+  }
+
+  if (distinctStopCities.size > 1 && stopCity) return stopCity;
+  return cityLimitedSearch ? stopCity || itineraryCity : '';
+}
+
+function shouldUseStopCityForMultiCity(stopCity: string, scopeCities: string[], distinctStopCities: Set<string>): boolean {
+  if (!stopCity || distinctStopCities.size <= 1) return false;
+  if (scopeCities.length <= 1) return true;
+  return scopeCities.some((city) => city === stopCity || city.includes(stopCity) || stopCity.includes(city));
+}
+
 function shouldUseCityLimitedSearch(itinerary: Itinerary): boolean {
+  if (itinerary.tripScope?.mode === 'single_city') return true;
+  if (itinerary.tripScope?.mode === 'multi_city') return false;
+
   const text = [
     itinerary.title,
     ...itinerary.days.map((day) => day.title),
@@ -172,6 +206,10 @@ function shouldUseCityLimitedSearch(itinerary: Itinerary): boolean {
 }
 
 function inferItineraryCity(itinerary: Itinerary): string {
+  if (itinerary.tripScope?.mode === 'single_city' && itinerary.tripScope.primaryCity) {
+    return itinerary.tripScope.primaryCity;
+  }
+
   const explicit = itinerary.days
     .flatMap((day) => [...day.stops, ...day.alternatives])
     .map((stop) => stop.city)
@@ -180,6 +218,15 @@ function inferItineraryCity(itinerary: Itinerary): string {
 
   const titleMatch = itinerary.title.match(/([\u4e00-\u9fa5]{2,4})(?:亲子|旅行|旅游|行程|攻略|游)/);
   return titleMatch?.[1] || '';
+}
+
+function getDistinctStopCities(itinerary: Itinerary): Set<string> {
+  return new Set(
+    itinerary.days
+      .flatMap((day) => [...day.stops, ...day.alternatives])
+      .map((stop) => stop.city?.trim())
+      .filter((city): city is string => Boolean(city))
+  );
 }
 
 async function planRoute(

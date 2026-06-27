@@ -1,4 +1,4 @@
-import type { ParsedDay, ParsedItinerary, ParsedStop } from '../src/shared/itinerary';
+import type { ParsedDay, ParsedItinerary, ParsedStop, TripScope } from '../src/shared/itinerary';
 
 const KNOWN_CITIES = [
   '宁波',
@@ -35,22 +35,26 @@ const GENERIC_ACTIVITY = /^(?:酒店|宾馆|住处)(?:午餐|晚餐|早餐|午�
 const PLACE_HINT =
   /(站|馆|园|寺|阁|庙|滩|街|城|广场|百货|商场|银泰|Meland|乐园|公园|博物馆|图书馆|展览馆|火车站|高铁站)$/i;
 const TRIP_CITY_SUFFIX = /(亲子|旅行|旅游|行程|攻略|三日游|两日游|一日游|游)$/;
+const STRONG_CROSS_CITY_ROUTE =
+  /(环线|小环线|大环线|跨城|路书|县城|川西|新疆|西藏|青甘|甘南|滇西|滇藏|伊犁|独库)/;
 const CROSS_CITY_ROUTE =
   /(自驾|取车|开车|租车|环线|小环线|大环线|跨城|路书|国道|高速|县城|川西|新疆|西藏|青甘|甘南|滇西|滇藏|伊犁|独库|318)/;
 
 export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): ParsedItinerary {
   const rawTitle = cleanTitle(parsed.title, rawText);
   const inferredTripCity = inferTripCity(rawTitle, rawText, parsed);
-  const useTripCityFallback = shouldUseSingleTripCity(rawTitle, rawText, parsed, inferredTripCity);
-  const tripCity = useTripCityFallback ? inferredTripCity : '';
+  const tripScope = resolveTripScope(parsed.tripScope, rawTitle, rawText, parsed, inferredTripCity);
+  const useTripCityFallback = tripScope.mode === 'single_city' && Boolean(tripScope.primaryCity);
+  const preserveExplicitStopCity = shouldPreserveExplicitStopCities(rawTitle, rawText, parsed, tripScope);
+  const tripCity = useTripCityFallback ? tripScope.primaryCity || inferredTripCity : '';
   const dateRange = inferDateRange(parsed.dateRange, `${rawTitle}\n${rawText}`);
 
   const days = (parsed.days || [])
-    .map((day) => cleanDay(day, tripCity, useTripCityFallback))
+    .map((day) => cleanDay(day, tripCity, useTripCityFallback, preserveExplicitStopCity))
     .filter((day): day is ParsedDay => Boolean(day && (day.stops?.length || 0) > 0));
 
   const alternatives = (parsed.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   return {
@@ -58,6 +62,7 @@ export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): Par
     title: summarizeTripTitle(rawTitle, rawText, tripCity, days),
     language: parsed.language || (/[\u4e00-\u9fa5]/.test(rawText) ? 'zh-CN' : 'auto'),
     dateRange,
+    tripScope,
     days,
     alternatives
   };
@@ -67,7 +72,8 @@ export function cleanStop(
   stop: ParsedStop,
   tripCity = '',
   fallbackOrder = 1,
-  useTripCityFallback = true
+  useTripCityFallback = true,
+  preserveExplicitStopCity = true
 ): ParsedStop | null {
   const source = normalizeWhitespace(stop.name || '');
   if (!source || NON_PLACE_LINE.test(source) || TRANSPORT_BACK.test(source) || GENERIC_ACTIVITY.test(source)) {
@@ -97,22 +103,27 @@ export function cleanStop(
     order: stop.order && stop.order > 0 ? stop.order : fallbackOrder,
     name,
     note: dedupeText(notes).join('；'),
-    city: useTripCityFallback ? stop.city || tripCity : '',
+    city: normalizeStopCity(stop.city, tripCity, useTripCityFallback, preserveExplicitStopCity),
     time,
     category: stop.category || ''
   };
 }
 
-function cleanDay(day: ParsedDay, tripCity: string, useTripCityFallback: boolean): ParsedDay | null {
+function cleanDay(
+  day: ParsedDay,
+  tripCity: string,
+  useTripCityFallback: boolean,
+  preserveExplicitStopCity: boolean
+): ParsedDay | null {
   const rawTitle = normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) || `Day ${day.dayIndex || ''}`;
   const date = day.date || extractDate(rawTitle);
   const stops = (day.stops || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
     .filter((stop): stop is ParsedStop => Boolean(stop))
     .map((stop, index) => ({ ...stop, order: index + 1 }));
 
   const alternatives = (day.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   if (stops.length === 0 && alternatives.length === 0) return null;
@@ -210,6 +221,112 @@ function inferTripTheme(text: string): string {
 
 function inferCityFromText(text: string): string {
   return KNOWN_CITIES.find((city) => new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(text)) || '';
+}
+
+function resolveTripScope(
+  scope: TripScope | undefined,
+  title: string,
+  rawText: string,
+  parsed: ParsedItinerary,
+  inferredTripCity: string
+): TripScope {
+  const normalized = normalizeTripScope(scope);
+  const explicitStopCities = getExplicitStopCities(parsed);
+  const text = `${title}\n${rawText}`;
+  const hasStrongCrossCitySignal = STRONG_CROSS_CITY_ROUTE.test(text) || explicitStopCities.size > 1;
+
+  if (normalized.mode === 'multi_city') {
+    return {
+      ...normalized,
+      primaryCity: '',
+      cities: mergeCities(normalized.cities || [], [...explicitStopCities])
+    };
+  }
+
+  if (normalized.mode === 'single_city' && normalized.primaryCity && !hasStrongCrossCitySignal) {
+    return {
+      ...normalized,
+      cities: normalized.cities?.length ? normalized.cities : [normalized.primaryCity]
+    };
+  }
+
+  if (shouldUseSingleTripCity(title, rawText, parsed, inferredTripCity)) {
+    return {
+      mode: 'single_city',
+      primaryCity: inferredTripCity,
+      cities: [inferredTripCity],
+      confidence: 0.55,
+      reason: 'Inferred from title and single-city route context.'
+    };
+  }
+
+  if (hasStrongCrossCitySignal || CROSS_CITY_ROUTE.test(text)) {
+    return {
+      mode: 'multi_city',
+      primaryCity: '',
+      cities: mergeCities(normalized.cities || [], explicitStopCities.size > 1 ? [...explicitStopCities] : []),
+      confidence: Math.max(normalized.confidence || 0, 0.55),
+      reason: normalized.reason || 'Detected cross-city or road-trip route wording.'
+    };
+  }
+
+  return normalized;
+}
+
+function normalizeTripScope(scope?: TripScope): TripScope {
+  const mode = scope?.mode === 'single_city' || scope?.mode === 'multi_city' ? scope.mode : 'unknown';
+  return {
+    mode,
+    primaryCity: normalizeWhitespace(scope?.primaryCity || ''),
+    cities: mergeCities(scope?.cities || []),
+    confidence: Number.isFinite(scope?.confidence) ? Math.max(0, Math.min(1, Number(scope?.confidence))) : 0,
+    reason: normalizeWhitespace(scope?.reason || '')
+  };
+}
+
+function shouldPreserveExplicitStopCities(
+  title: string,
+  rawText: string,
+  parsed: ParsedItinerary,
+  scope: TripScope
+): boolean {
+  const explicitStopCities = getExplicitStopCities(parsed);
+  if (explicitStopCities.size === 0) return true;
+  if (scope.mode === 'single_city') return true;
+  if (explicitStopCities.size > 1) return true;
+
+  const [onlyCity] = [...explicitStopCities];
+  const text = `${title}\n${rawText}`;
+  if (scope.mode === 'multi_city' && STRONG_CROSS_CITY_ROUTE.test(text)) return false;
+  if (scope.mode === 'multi_city' && (scope.cities || []).length > 1) {
+    return (scope.cities || []).some((city) => city === onlyCity);
+  }
+
+  return scope.mode !== 'multi_city';
+}
+
+function normalizeStopCity(
+  stopCity: string | undefined,
+  tripCity: string,
+  useTripCityFallback: boolean,
+  preserveExplicitStopCity: boolean
+): string {
+  const explicit = normalizeWhitespace(stopCity || '');
+  if (useTripCityFallback) return explicit || tripCity;
+  return preserveExplicitStopCity ? explicit : '';
+}
+
+function getExplicitStopCities(parsed: ParsedItinerary): Set<string> {
+  return new Set(
+    (parsed.days || [])
+      .flatMap((day) => [...(day.stops || []), ...(day.alternatives || [])])
+      .map((stop) => normalizeWhitespace(stop.city || ''))
+      .filter(Boolean)
+  );
+}
+
+function mergeCities(...groups: string[][]): string[] {
+  return Array.from(new Set(groups.flat().map((city) => normalizeWhitespace(city)).filter(Boolean)));
 }
 
 function shouldUseSingleTripCity(

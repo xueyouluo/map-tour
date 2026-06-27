@@ -39,7 +39,7 @@ interface ParseOptions {
 const parseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'language', 'dateRange', 'days', 'alternatives'],
+  required: ['title', 'language', 'dateRange', 'tripScope', 'days', 'alternatives'],
   properties: {
     title: { type: 'string' },
     language: { type: 'string' },
@@ -51,6 +51,21 @@ const parseSchema = {
         start: { type: 'string' },
         end: { type: 'string' },
         label: { type: 'string' }
+      }
+    },
+    tripScope: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['mode', 'primaryCity', 'cities', 'confidence', 'reason'],
+      properties: {
+        mode: { type: 'string', enum: ['single_city', 'multi_city', 'unknown'] },
+        primaryCity: { type: 'string' },
+        cities: {
+          type: 'array',
+          items: { type: 'string' }
+        },
+        confidence: { type: 'number' },
+        reason: { type: 'string' }
       }
     },
     days: {
@@ -489,15 +504,17 @@ function buildParserInstructions(): string {
     '必须保留用户语言，不翻译地点名、标题或备注。',
     'title 必须是整趟旅行的短标题，例如“宁波 3 日亲子行程”“杭州三日懒人逛吃攻略”；不要复制第一天的长句、交通句或完整路线。',
     'day.title 必须是当天短主题或区域，例如“南部片区到老外滩”“西湖经典线”；不要把当天所有 stop、时间、交通方式都写进标题。',
+    '必须判断 tripScope：所有主要路线点都在同一城市时 mode=single_city；跨城市、自驾、环线、路书、多县市移动时 mode=multi_city；证据不足时 mode=unknown。',
+    'tripScope.primaryCity 只在 single_city 时填写主城市；multi_city 或 unknown 时填空字符串。tripScope.cities 填明确涉及的城市/州/县级目的地，按行程顺序去重。',
     '只提取真实路线 stop：景点、博物馆、公园、寺庙、街区、商场、夜市、车站、机场、明确作为路线点的酒店等。',
     '不要把这些内容解析为每天路线 stop：天气提示、攻略说明、住宿区域推荐、市内交通说明、核心地铁站点、限制说明、备注、优势、泛泛的回酒店休息。',
     '如果文本包含美食推荐、餐厅推荐、咖啡店、店铺、商场内具体店名等，它们不是每天路线 stop；请放入顶层 alternatives，作为地图推荐点。category 可用 restaurant/shop/cafe。',
-    '跨城、自驾、环线、路书类行程不要把出发地或返程地当成所有 stop.city；如果不能确定某个地点所属城市，city 留空。',
+    '跨城、自驾、环线、路书类行程不要把出发地或返程地当成所有 stop.city；如果不能确定某个地点所属城市，city 留空；能确定时给每个 stop 写自己的城市/州/县级上下文。',
     '如果出现“Day1：A→B→C”或“D1 A -> B -> C”，必须拆成 day.stops: A, B, C。',
     '如果出现编号行“1. 14:00-16:00 周尧昆虫博物馆（8号线直达）”，stop.name 只写“周尧昆虫博物馆”，time 写“14:00-16:00”，括号和预约/交通信息放 note。',
     '交通句只在有明确目的地时提取目的地，例如“地铁去老外滩”提取“老外滩”；“地铁回酒店休息”不要提取。',
     '按原文 day 顺序输出。原文有 Day1/Day2/Day3 时，输出这些 travel days，不要把前言或推荐区变成额外 day。',
-    '输出 schema: { title: string, language: string, dateRange: {start:string,end:string,label:string}, days: [{dayIndex:number,date:string,title:string,stops:[{order:number,name:string,note:string,city:string,time:string,category:string}],alternatives:[]}], alternatives: [] }。',
+    '输出 schema: { title: string, language: string, dateRange: {start:string,end:string,label:string}, tripScope:{mode:string,primaryCity:string,cities:string[],confidence:number,reason:string}, days: [{dayIndex:number,date:string,title:string,stops:[{order:number,name:string,note:string,city:string,time:string,category:string}],alternatives:[]}], alternatives: [] }。',
     '缺失字段用空字符串或空数组，不要用 null。'
   ].join('\n');
 }
@@ -561,6 +578,7 @@ export function localParse(rawText: string): ParsedItinerary {
       title: 'Untitled itinerary',
       language: 'auto',
       dateRange: { start: '', end: '', label: '' },
+      tripScope: { mode: 'unknown', primaryCity: '', cities: [], confidence: 0, reason: '' },
       days: [],
       alternatives: []
     };
@@ -621,6 +639,7 @@ export function localParse(rawText: string): ParsedItinerary {
     title,
     language: /[\u4e00-\u9fa5]/.test(text) ? 'zh-CN' : 'auto',
     dateRange: { start: '', end: '', label: '' },
+    tripScope: { mode: 'unknown', primaryCity: '', cities: [], confidence: 0, reason: '' },
     days,
     alternatives: []
   };

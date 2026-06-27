@@ -11,6 +11,16 @@ export interface DateRange {
   label?: string;
 }
 
+export type TripScopeMode = 'single_city' | 'multi_city' | 'unknown';
+
+export interface TripScope {
+  mode: TripScopeMode;
+  primaryCity?: string;
+  cities?: string[];
+  confidence?: number;
+  reason?: string;
+}
+
 export interface PoiCandidate {
   poiId?: string;
   name: string;
@@ -66,6 +76,7 @@ export interface Itinerary {
   title: string;
   language: string;
   dateRange: DateRange;
+  tripScope?: TripScope;
   days: ItineraryDay[];
   alternatives: Stop[];
   routeSegments: RouteSegment[];
@@ -94,6 +105,7 @@ export interface ParsedItinerary {
   title?: string;
   language?: string;
   dateRange?: DateRange;
+  tripScope?: TripScope;
   days?: ParsedDay[];
   alternatives?: ParsedStop[];
 }
@@ -164,9 +176,21 @@ export function normalizeParsedItinerary(parsed: ParsedItinerary, id = 'draft'):
     title: parsed.title?.trim() || 'Untitled itinerary',
     language: parsed.language?.trim() || 'auto',
     dateRange: parsed.dateRange || {},
+    tripScope: normalizeTripScope(parsed.tripScope),
     days,
     alternatives,
     routeSegments: []
+  };
+}
+
+function normalizeTripScope(scope?: TripScope): TripScope {
+  const mode = scope?.mode === 'single_city' || scope?.mode === 'multi_city' ? scope.mode : 'unknown';
+  return {
+    mode,
+    primaryCity: scope?.primaryCity?.trim() || '',
+    cities: Array.from(new Set((scope?.cities || []).map((city) => city.trim()).filter(Boolean))),
+    confidence: Number.isFinite(scope?.confidence) ? Math.max(0, Math.min(1, Number(scope?.confidence))) : 0,
+    reason: scope?.reason?.trim() || ''
   };
 }
 
