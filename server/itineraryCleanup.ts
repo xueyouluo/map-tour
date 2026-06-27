@@ -35,18 +35,22 @@ const GENERIC_ACTIVITY = /^(?:酒店|宾馆|住处)(?:午餐|晚餐|早餐|午�
 const PLACE_HINT =
   /(站|馆|园|寺|阁|庙|滩|街|城|广场|百货|商场|银泰|Meland|乐园|公园|博物馆|图书馆|展览馆|火车站|高铁站)$/i;
 const TRIP_CITY_SUFFIX = /(亲子|旅行|旅游|行程|攻略|三日游|两日游|一日游|游)$/;
+const CROSS_CITY_ROUTE =
+  /(自驾|取车|开车|租车|环线|小环线|大环线|跨城|路书|国道|高速|县城|川西|新疆|西藏|青甘|甘南|滇西|滇藏|伊犁|独库|318)/;
 
 export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): ParsedItinerary {
   const rawTitle = cleanTitle(parsed.title, rawText);
-  const tripCity = inferTripCity(rawTitle, rawText, parsed);
+  const inferredTripCity = inferTripCity(rawTitle, rawText, parsed);
+  const useTripCityFallback = shouldUseSingleTripCity(rawTitle, rawText, parsed, inferredTripCity);
+  const tripCity = useTripCityFallback ? inferredTripCity : '';
   const dateRange = inferDateRange(parsed.dateRange, `${rawTitle}\n${rawText}`);
 
   const days = (parsed.days || [])
-    .map((day) => cleanDay(day, tripCity))
+    .map((day) => cleanDay(day, tripCity, useTripCityFallback))
     .filter((day): day is ParsedDay => Boolean(day && (day.stops?.length || 0) > 0));
 
   const alternatives = (parsed.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   return {
@@ -59,7 +63,12 @@ export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): Par
   };
 }
 
-export function cleanStop(stop: ParsedStop, tripCity = '', fallbackOrder = 1): ParsedStop | null {
+export function cleanStop(
+  stop: ParsedStop,
+  tripCity = '',
+  fallbackOrder = 1,
+  useTripCityFallback = true
+): ParsedStop | null {
   const source = normalizeWhitespace(stop.name || '');
   if (!source || NON_PLACE_LINE.test(source) || TRANSPORT_BACK.test(source) || GENERIC_ACTIVITY.test(source)) {
     return null;
@@ -88,22 +97,22 @@ export function cleanStop(stop: ParsedStop, tripCity = '', fallbackOrder = 1): P
     order: stop.order && stop.order > 0 ? stop.order : fallbackOrder,
     name,
     note: dedupeText(notes).join('；'),
-    city: stop.city || tripCity,
+    city: useTripCityFallback ? stop.city || tripCity : '',
     time,
     category: stop.category || ''
   };
 }
 
-function cleanDay(day: ParsedDay, tripCity: string): ParsedDay | null {
+function cleanDay(day: ParsedDay, tripCity: string, useTripCityFallback: boolean): ParsedDay | null {
   const rawTitle = normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) || `Day ${day.dayIndex || ''}`;
   const date = day.date || extractDate(rawTitle);
   const stops = (day.stops || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
     .filter((stop): stop is ParsedStop => Boolean(stop))
     .map((stop, index) => ({ ...stop, order: index + 1 }));
 
   const alternatives = (day.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1))
+    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback))
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   if (stops.length === 0 && alternatives.length === 0) return null;
@@ -201,6 +210,27 @@ function inferTripTheme(text: string): string {
 
 function inferCityFromText(text: string): string {
   return KNOWN_CITIES.find((city) => new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(text)) || '';
+}
+
+function shouldUseSingleTripCity(
+  title: string,
+  rawText: string,
+  parsed: ParsedItinerary,
+  inferredTripCity: string
+): boolean {
+  if (!inferredTripCity) return false;
+  const text = `${title}\n${rawText}`;
+  if (CROSS_CITY_ROUTE.test(text)) return false;
+
+  const explicitStopCities = new Set(
+    (parsed.days || [])
+      .flatMap((day) => [...(day.stops || []), ...(day.alternatives || [])])
+      .map((stop) => normalizeWhitespace(stop.city || ''))
+      .filter(Boolean)
+  );
+  if (explicitStopCities.size > 1) return false;
+
+  return true;
 }
 
 function countExplicitDays(rawText: string): number {

@@ -29,5 +29,47 @@ describe('cleanParsedItinerary titles', () => {
     expect(cleaned.title).toBe('宁波 1 日亲子行程');
     expect(cleaned.days?.[0].title).toBe('周尧昆虫博物馆到老外滩');
     expect(cleaned.days?.[0].stops?.map((stop) => stop.name)).toEqual(['宁波站', '周尧昆虫博物馆', '鄞州公园', '老外滩']);
+    expect(cleaned.days?.[0].stops?.every((stop) => stop.city === '宁波')).toBe(true);
+  });
+
+  it('does not force a return city onto every stop in cross-city road trips', () => {
+    const rawText = `川西小环线规划
+day1取车出发，开车到都江堰，晚上住都江堰。
+day2早起开车到四姑娘山双桥沟，景区出来后开车到小金/丹巴县城住宿。
+day3丹巴出发经过墨石公园、塔公草原到新都桥，晚上住新都桥
+day4新都桥开车到康定、泸定、雅安，晚上住雅安。
+day5雅安开车回重庆。`;
+
+    const cleaned = cleanParsedItinerary(
+      {
+        title: '川西小环线规划',
+        language: 'zh-CN',
+        dateRange: { start: '', end: '', label: '' },
+        days: [
+          {
+            dayIndex: 4,
+            title: 'day4 新都桥开车到康定、泸定、雅安',
+            stops: [
+              { order: 1, name: '康定' },
+              { order: 2, name: '泸定' },
+              { order: 3, name: '雅安' }
+            ],
+            alternatives: []
+          },
+          {
+            dayIndex: 5,
+            title: 'day5 雅安开车回重庆',
+            stops: [{ order: 1, name: '雅安' }],
+            alternatives: []
+          }
+        ],
+        alternatives: []
+      },
+      rawText
+    );
+
+    const stops = cleaned.days?.flatMap((day) => day.stops || []) || [];
+    expect(stops.map((stop) => stop.name)).toEqual(['康定', '泸定', '雅安', '雅安']);
+    expect(stops.every((stop) => !stop.city)).toBe(true);
   });
 });

@@ -37,7 +37,8 @@ export async function enrichItineraryWithAmap(
   onProgress?: (message: string) => void
 ): Promise<Itinerary> {
   const next: Itinerary = structuredClone(itinerary);
-  const itineraryCity = inferItineraryCity(next);
+  const cityLimitedSearch = shouldUseCityLimitedSearch(next);
+  const itineraryCity = cityLimitedSearch ? inferItineraryCity(next) : '';
   const mainStops = next.days.flatMap((day) => day.stops);
   const alternativeStops = [
     ...next.days.flatMap((day) => day.alternatives),
@@ -49,7 +50,7 @@ export async function enrichItineraryWithAmap(
     const stop = allStops[index];
     if (stop.poiMatch?.status === 'matched' || stop.poiMatch?.status === 'unmatched') continue;
     onProgress?.(`匹配地点 ${index + 1}/${allStops.length}: ${stop.name}`);
-    stop.poiMatch = await matchStop(AMap, stop, itineraryCity);
+    stop.poiMatch = await matchStop(AMap, stop, itineraryCity, cityLimitedSearch);
   }
 
   const existingSegments = new Map(
@@ -78,17 +79,23 @@ function routeSegmentKey(dayIndex: number, fromStopId: string, toStopId: string)
   return `${dayIndex}:${fromStopId}->${toStopId}`;
 }
 
-function matchStop(AMap: AMapNamespace, stop: Stop, itineraryCity: string): Promise<PoiMatch> {
-  return matchStopWithRetry(AMap, stop, itineraryCity, 0);
+function matchStop(
+  AMap: AMapNamespace,
+  stop: Stop,
+  itineraryCity: string,
+  cityLimitedSearch: boolean
+): Promise<PoiMatch> {
+  return matchStopWithRetry(AMap, stop, itineraryCity, cityLimitedSearch, 0);
 }
 
 async function matchStopWithRetry(
   AMap: AMapNamespace,
   stop: Stop,
   itineraryCity: string,
+  cityLimitedSearch: boolean,
   attempt: number
 ): Promise<PoiMatch> {
-  const searchCity = stop.city || itineraryCity;
+  const searchCity = cityLimitedSearch ? stop.city || itineraryCity : '';
   const placeSearch = new AMap.PlaceSearch({
     city: searchCity || undefined,
     citylimit: Boolean(searchCity),
@@ -139,10 +146,29 @@ async function matchStopWithRetry(
 
   if (isQpsLimitError(result.errorInfo, result.errorCode) && attempt < MAX_AMAP_RETRIES) {
     await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
-    return matchStopWithRetry(AMap, stop, itineraryCity, attempt + 1);
+    return matchStopWithRetry(AMap, stop, itineraryCity, cityLimitedSearch, attempt + 1);
   }
 
   return result;
+}
+
+function shouldUseCityLimitedSearch(itinerary: Itinerary): boolean {
+  const text = [
+    itinerary.title,
+    ...itinerary.days.map((day) => day.title),
+    ...itinerary.days.flatMap((day) => day.stops.map((stop) => `${stop.name}${stop.note || ''}`))
+  ].join('\n');
+  if (/(自驾|取车|开车|租车|环线|小环线|大环线|跨城|路书|国道|高速|县城|川西|新疆|西藏|青甘|甘南|滇西|滇藏|伊犁|独库|318)/.test(text)) {
+    return false;
+  }
+
+  const stopCities = new Set(
+    itinerary.days
+      .flatMap((day) => [...day.stops, ...day.alternatives])
+      .map((stop) => stop.city?.trim())
+      .filter((city): city is string => Boolean(city))
+  );
+  return stopCities.size <= 1;
 }
 
 function inferItineraryCity(itinerary: Itinerary): string {
