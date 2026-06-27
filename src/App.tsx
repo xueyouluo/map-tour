@@ -17,17 +17,6 @@ type ActiveDay = number | 'all';
 type AMapNamespace = any;
 type CopyStatus = 'idle' | 'copied' | 'failed';
 
-const sampleText = `杭州两日游
-D1 6月28日 西湖和灵隐寺
-1. 曲院风荷 - 上午赏荷，湖边散步
-2. 灵隐寺 - 午后参观，注意预约
-3. 河坊街 - 晚上吃小吃
-
-D2 6月29日 城市漫游
-1. 浙江省博物馆 - 上午
-2. 武林夜市 - 晚餐和购物
-备选：法喜寺、茅家埠`;
-
 function formatParseProgress(hasImage: boolean, elapsedMs: number): string {
   const elapsedSeconds = Math.floor(elapsedMs / 1000);
   const phases = hasImage
@@ -320,9 +309,6 @@ function ImportPanel({
             onChange={(event) => handleImageFile(event.target.files?.[0] || null)}
           />
         </label>
-        <button className="ghost-button" type="button" onClick={() => setText(sampleText)}>
-          填入示例
-        </button>
       </div>
       {image && imagePreviewUrl && (
         <div className="image-preview">
@@ -848,7 +834,7 @@ function MapView({
     const overlays = drawResult.overlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
-    if (overlays.length) map.setFitView(overlays, false, [90, 90, 120, 90]);
+    if (overlays.length) map.setFitView(overlays, false, getMapFitPadding());
   }, [itinerary, activeDay, onStopSelect, mapReady, showMapLabels]);
 
   useEffect(() => {
@@ -880,6 +866,24 @@ function MapView({
       {itinerary && <div className="map-day-filter"><DaySelector itinerary={itinerary} activeDay={activeDay} onDayChange={onDayChange} /></div>}
     </div>
   );
+}
+
+function getMapFitPadding(): [number, number, number, number] {
+  if (!window.matchMedia('(max-width: 760px)').matches) {
+    return [90, 90, 120, 90];
+  }
+
+  const panelRect = document.querySelector('.side-panel')?.getBoundingClientRect();
+  const filterRect = document.querySelector('.map-day-filter')?.getBoundingClientRect();
+  const coveredTop = Math.min(
+    panelRect?.top ?? Number.POSITIVE_INFINITY,
+    filterRect?.top ?? Number.POSITIVE_INFINITY
+  );
+  const bottom = Number.isFinite(coveredTop)
+    ? Math.max(220, Math.round(window.innerHeight - coveredTop + 28))
+    : Math.round(Math.min(window.innerHeight * 0.64, 620) + 86);
+
+  return [72, 34, bottom, 34];
 }
 
 function drawItinerary(

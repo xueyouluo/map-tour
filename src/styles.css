@@ -124,7 +124,7 @@ textarea:focus {
 
 .import-actions {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr;
   gap: 10px;
   margin: 12px 0;
 }

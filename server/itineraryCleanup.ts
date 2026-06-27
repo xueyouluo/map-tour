@@ -37,9 +37,9 @@ const PLACE_HINT =
 const TRIP_CITY_SUFFIX = /(亲子|旅行|旅游|行程|攻略|三日游|两日游|一日游|游)$/;
 
 export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): ParsedItinerary {
-  const title = cleanTitle(parsed.title, rawText);
-  const tripCity = inferTripCity(title, rawText, parsed);
-  const dateRange = inferDateRange(parsed.dateRange, `${title}\n${rawText}`);
+  const rawTitle = cleanTitle(parsed.title, rawText);
+  const tripCity = inferTripCity(rawTitle, rawText, parsed);
+  const dateRange = inferDateRange(parsed.dateRange, `${rawTitle}\n${rawText}`);
 
   const days = (parsed.days || [])
     .map((day) => cleanDay(day, tripCity))
@@ -51,7 +51,7 @@ export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): Par
 
   return {
     ...parsed,
-    title,
+    title: summarizeTripTitle(rawTitle, rawText, tripCity, days),
     language: parsed.language || (/[\u4e00-\u9fa5]/.test(rawText) ? 'zh-CN' : 'auto'),
     dateRange,
     days,
@@ -95,8 +95,8 @@ export function cleanStop(stop: ParsedStop, tripCity = '', fallbackOrder = 1): P
 }
 
 function cleanDay(day: ParsedDay, tripCity: string): ParsedDay | null {
-  const title = normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) || `Day ${day.dayIndex || ''}`;
-  const date = day.date || extractDate(title);
+  const rawTitle = normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) || `Day ${day.dayIndex || ''}`;
+  const date = day.date || extractDate(rawTitle);
   const stops = (day.stops || [])
     .map((stop, index) => cleanStop(stop, tripCity, index + 1))
     .filter((stop): stop is ParsedStop => Boolean(stop))
@@ -111,7 +111,7 @@ function cleanDay(day: ParsedDay, tripCity: string): ParsedDay | null {
   return {
     ...day,
     date,
-    title: title.replace(/\s+/g, ' '),
+    title: summarizeDayTitle(rawTitle, day.dayIndex || 0, stops),
     stops,
     alternatives
   };
@@ -125,6 +125,87 @@ function cleanTitle(title: string | undefined, rawText: string): string {
   const candidate = normalizeWhitespace(title || firstLine || 'Untitled itinerary');
   if (NON_PLACE_LINE.test(candidate)) return firstLine || 'Untitled itinerary';
   return candidate.slice(0, 60);
+}
+
+function summarizeTripTitle(title: string, rawText: string, tripCity: string, days: ParsedDay[]): string {
+  const candidate = stripDecorations(title);
+  if (isConciseTripTitle(candidate)) return candidate;
+
+  const city = tripCity || inferCityFromText(`${title}\n${rawText}`) || '旅行';
+  const dayCount = days.length || countExplicitDays(rawText);
+  const theme = inferTripTheme(`${title}\n${rawText}`);
+  const noun = /自驾/.test(theme) ? '路线' : '行程';
+  return normalizeWhitespace(`${city}${dayCount ? ` ${dayCount} 日` : ''}${theme}${noun}`);
+}
+
+function summarizeDayTitle(rawTitle: string, dayIndex: number, stops: ParsedStop[]): string {
+  const candidate = stripDayTitle(rawTitle, dayIndex);
+  if (isConciseDayTitle(candidate)) return candidate;
+
+  const titleStops = stops.filter((stop) => !/(?:站|机场|酒店|宾馆|住处)$/.test(stop.name));
+  const usableStops = titleStops.length ? titleStops : stops;
+  if (usableStops.length >= 2) {
+    const first = shortenTitlePlace(usableStops[0].name);
+    const last = shortenTitlePlace(usableStops[usableStops.length - 1].name);
+    return first === last ? first : `${first}到${last}`;
+  }
+  if (usableStops.length === 1) return shortenTitlePlace(usableStops[0].name);
+  return `Day ${dayIndex || ''}`.trim();
+}
+
+function isConciseTripTitle(title: string): boolean {
+  if (!title || title.length > 28) return false;
+  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|放行李|存行李|不跑|只玩/i.test(title);
+}
+
+function isConciseDayTitle(title: string): boolean {
+  if (!title || title.length < 2 || title.length > 24) return false;
+  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|酒店|放行李|存行李|不跑|只玩|上午|下午|晚上/i.test(title);
+}
+
+function stripDayTitle(title: string, dayIndex: number): string {
+  const dayPattern = dayIndex
+    ? new RegExp(`^(?:第\\s*${dayIndex}\\s*天|Day\\s*${dayIndex}|D\\s*${dayIndex})\\s*`, 'i')
+    : /^(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)\s*/i;
+  return stripDecorations(title)
+    .replace(dayPattern, '')
+    .replace(/^[｜|:：.)、\-\s]+/, '')
+    .replace(/^\d{1,2}[./月-]\d{1,2}[日号]?\s*/, '')
+    .replace(/^[（(]?(?:周[一二三四五六日天]|星期[一二三四五六日天])?[·.\s]*[）)]?/, '')
+    .replace(/^[（(]|[）)]$/g, '')
+    .replace(/^[-–—·\s]+/, '')
+    .trim();
+}
+
+function stripDecorations(value: string): string {
+  return normalizeWhitespace(value)
+    .replace(/^#+\s*/, '')
+    .replace(/[📍🚶‍♀️🚶🚌☀️😭]+/gu, '')
+    .replace(/\s*[|｜]\s*/g, ' ')
+    .trim();
+}
+
+function shortenTitlePlace(name: string): string {
+  const normalized = name.replace(/[（(].*?[）)]/g, '').replace(/\s+/g, '').trim();
+  return normalized.length > 10 ? `${normalized.slice(0, 10)}…` : normalized;
+}
+
+function inferTripTheme(text: string): string {
+  if (/亲子/.test(text)) return '亲子';
+  if (/自驾/.test(text)) return '自驾';
+  if (/Citywalk|citywalk/i.test(text)) return 'Citywalk';
+  if (/逛吃|美食/.test(text)) return '逛吃';
+  if (/懒人|不费腿/.test(text)) return '懒人';
+  return '';
+}
+
+function inferCityFromText(text: string): string {
+  return KNOWN_CITIES.find((city) => new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(text)) || '';
+}
+
+function countExplicitDays(rawText: string): number {
+  const matches = rawText.match(/(?:^|\n)\s*(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)(?=\s|[：:|｜.)、-]|$)/gi);
+  return matches ? new Set(matches.map((match) => match.replace(/\D/g, ''))).size : 0;
 }
 
 function inferTripCity(title: string, rawText: string, parsed: ParsedItinerary): string {
