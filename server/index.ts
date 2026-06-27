@@ -11,9 +11,17 @@ import type { Itinerary } from '../src/shared/itinerary';
 dotenv.config();
 
 const app = express();
+const maxImageBytes = 8 * 1024 * 1024;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }
+  limits: { fileSize: maxImageBytes },
+  fileFilter: (_req, file, callback) => {
+    if (file.mimetype.startsWith('image/')) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('只支持上传图片文件。'));
+  }
 });
 const store = new ItineraryStore();
 const port = Number(process.env.PORT || 8787);
@@ -27,10 +35,12 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/config', (_req, res) => {
+  const hasAiRuntime = hasConfiguredAiRuntime();
   res.json({
     amapKey: process.env.AMAP_JSAPI_KEY || '',
     hasAmapProxy: Boolean(process.env.AMAP_SECURITY_JS_CODE),
-    hasOpenAI: hasConfiguredAiRuntime()
+    hasAiRuntime,
+    hasOpenAI: hasAiRuntime
   });
 });
 
@@ -139,6 +149,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: `图片不能超过 ${Math.round(maxImageBytes / 1024 / 1024)}MB。` });
+      return;
+    }
+    res.status(400).json({ error: error.message });
+    return;
+  }
+
   const message = error instanceof Error ? error.message : 'Unknown server error';
   res.status(500).json({ error: message });
 });

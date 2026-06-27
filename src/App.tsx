@@ -10,12 +10,14 @@ import {
   type Itinerary,
   type ItineraryDay,
   type RoutePreference,
-  type Stop
+  type Stop,
+  type TripScope
 } from './shared/itinerary';
 
 type ActiveDay = number | 'all';
 type AMapNamespace = any;
 type CopyStatus = 'idle' | 'copied' | 'failed';
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function formatParseProgress(hasImage: boolean, elapsedMs: number): string {
   const elapsedSeconds = Math.floor(elapsedMs / 1000);
@@ -256,6 +258,7 @@ function ImportPanel({
   const [text, setText] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+  const [fileError, setFileError] = useState('');
 
   useEffect(() => {
     if (!image) {
@@ -269,7 +272,16 @@ function ImportPanel({
   }, [image]);
 
   function handleImageFile(file?: File | null) {
-    if (!file || !file.type.startsWith('image/')) return;
+    setFileError('');
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setFileError('只支持上传图片文件。');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setFileError(`图片不能超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB。`);
+      return;
+    }
     setImage(file);
   }
 
@@ -281,10 +293,8 @@ function ImportPanel({
   }
 
   function handleDrop(event: DragEvent<HTMLTextAreaElement>) {
-    const droppedImage = Array.from(event.dataTransfer.files).find((file) => file.type.startsWith('image/'));
-    if (!droppedImage) return;
     event.preventDefault();
-    handleImageFile(droppedImage);
+    handleImageFile(Array.from(event.dataTransfer.files)[0] || null);
   }
 
   return (
@@ -310,6 +320,7 @@ function ImportPanel({
           />
         </label>
       </div>
+      {fileError && <div className="import-error" role="alert">{fileError}</div>}
       {image && imagePreviewUrl && (
         <div className="image-preview">
           <img src={imagePreviewUrl} alt="已选择的行程截图预览" />
@@ -317,7 +328,14 @@ function ImportPanel({
             <strong>{image.name}</strong>
             <span>{formatFileSize(image.size)}</span>
           </div>
-          <button type="button" aria-label="移除图片" onClick={() => setImage(null)}>
+          <button
+            type="button"
+            aria-label="移除图片"
+            onClick={() => {
+              setImage(null);
+              setFileError('');
+            }}
+          >
             <X size={16} />
           </button>
         </div>
@@ -325,7 +343,7 @@ function ImportPanel({
       <button
         className="primary-button"
         type="button"
-        disabled={busy || (!text.trim() && !image)}
+        disabled={busy || Boolean(fileError) || (!text.trim() && !image)}
         onClick={() => onParse(text, image)}
       >
         {busy ? <Loader2 className="spin" size={17} /> : <Upload size={17} />}
@@ -393,6 +411,7 @@ function ItineraryPanel({
           <CalendarDays size={16} />
           <span>{itinerary.dateRange.label || [itinerary.dateRange.start, itinerary.dateRange.end].filter(Boolean).join(' - ') || '日期未识别'}</span>
         </div>
+        <TripScopeLine scope={itinerary.tripScope} />
       </div>
 
       <DaySelector itinerary={itinerary} activeDay={activeDay} onDayChange={onDayChange} />
@@ -435,6 +454,22 @@ function ItineraryPanel({
       )}
     </section>
   );
+}
+
+function TripScopeLine({ scope }: { scope?: TripScope }) {
+  const label = formatTripScope(scope);
+  if (!label) return null;
+  return <div className="trip-scope-line">{label}</div>;
+}
+
+function formatTripScope(scope?: TripScope): string {
+  if (!scope || scope.mode === 'unknown') return '';
+  const cities = (scope.cities || []).filter(Boolean);
+  const cityText = cities.length
+    ? cities.slice(0, 4).join(' / ') + (cities.length > 4 ? ` 等 ${cities.length} 地` : '')
+    : scope.primaryCity || '';
+  if (scope.mode === 'single_city') return cityText ? `单城市 · ${cityText}` : '单城市';
+  return cityText ? `多城市 · ${cityText}` : '多城市路线';
 }
 
 function ShareDialog({

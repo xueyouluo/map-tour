@@ -244,6 +244,17 @@ textarea:focus {
   color: #0052ff;
 }
 
+.import-error {
+  margin: -2px 0 12px;
+  border: 1px solid #ffd1d1;
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: #fff1f1;
+  color: #a21b1b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .trip-summary {
   padding-bottom: 14px;
 }
@@ -261,6 +272,21 @@ textarea:focus {
   gap: 8px;
   color: #4b5567;
   font-size: 14px;
+}
+
+.trip-scope-line {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 9px;
+  border: 1px solid #d7deeb;
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: #ffffff;
+  color: #4b5567;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .day-selector {

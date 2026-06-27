@@ -115,12 +115,12 @@ async function matchStopWithRetry(
     placeSearch.search(query, (status: string, result: any) => {
       const pois = result?.poiList?.pois || [];
       const candidates = pois.map(normalizePoi).filter((poi: PoiCandidate) => poi.location);
-      const best = candidates[0];
+      const best = pickBestPoiCandidate(candidates, stop, searchCity, tripScope);
       if (status === 'complete' && best?.location) {
         resolve({
           ...best,
           status: 'matched',
-          confidence: 0.86,
+          confidence: estimatePoiConfidence(best, stop, searchCity, tripScope),
           amapUrl: createAmapMarkerUrl(best),
           candidates
         });
@@ -155,6 +155,72 @@ async function matchStopWithRetry(
   }
 
   return result;
+}
+
+function pickBestPoiCandidate(
+  candidates: PoiCandidate[],
+  stop: Stop,
+  searchCity: string,
+  tripScope: Itinerary['tripScope']
+): PoiCandidate | undefined {
+  return candidates
+    .map((candidate, index) => ({
+      candidate,
+      score: scorePoiCandidate(candidate, stop, searchCity, tripScope) - index * 0.01
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.candidate;
+}
+
+function estimatePoiConfidence(
+  candidate: PoiCandidate,
+  stop: Stop,
+  searchCity: string,
+  tripScope: Itinerary['tripScope']
+): number {
+  const score = scorePoiCandidate(candidate, stop, searchCity, tripScope);
+  if (score >= 80) return 0.92;
+  if (score >= 55) return 0.86;
+  if (score >= 30) return 0.72;
+  return 0.6;
+}
+
+function scorePoiCandidate(
+  candidate: PoiCandidate,
+  stop: Stop,
+  searchCity: string,
+  tripScope: Itinerary['tripScope']
+): number {
+  const stopName = normalizeSearchText(stop.name);
+  const candidateName = normalizeSearchText(candidate.name);
+  const scopeText = normalizeSearchText(`${candidate.name} ${candidate.address || ''} ${candidate.type || ''}`);
+  const cityHints = [
+    searchCity,
+    stop.city || '',
+    ...(tripScope?.cities || [])
+  ].map(normalizeSearchText).filter(Boolean);
+
+  let score = 0;
+  if (candidateName === stopName) score += 55;
+  else if (candidateName && (candidateName.includes(stopName) || stopName.includes(candidateName))) score += 36;
+  else if (stopName.length >= 3 && scopeText.includes(stopName)) score += 22;
+
+  for (const city of cityHints) {
+    if (scopeText.includes(city)) {
+      score += 18;
+      break;
+    }
+  }
+
+  if (/景区|风景|公园|博物馆|寺|街区|商场|餐饮|酒店|交通设施/.test(candidate.type || '')) score += 6;
+  return score;
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[（）()[\]·,，.。:：;；'"“”‘’_-]/g, '')
+    .trim();
 }
 
 function resolveSearchCity(

@@ -118,13 +118,13 @@ export async function parseItinerary(input: ParseInput, options: ParseOptions = 
 
   if (!apiKey || !model) {
     if (input.image) {
-      throw new Error('Image parsing requires ARK_API_KEY and an Ark vision model.');
+      throw new Error('图片解析需要先配置视觉理解模型。');
     }
 
     return {
       itinerary: normalizeParsedItinerary(cleanParsedItinerary(localParse(input.text || ''), input.text || '')),
       source: 'local-fallback',
-      warning: 'AI API key or model is missing; used local fallback parsing.'
+      warning: '未配置文本解析模型，已使用本地规则解析。'
     };
   }
 
@@ -154,7 +154,7 @@ export async function parseItinerary(input: ParseInput, options: ParseOptions = 
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${runtime.provider === 'ark' ? 'Ark vision' : 'OpenAI'} parsing failed: ${message}`);
+    throw new Error(`${runtime.provider === 'ark' ? '视觉理解模型' : '文本解析模型'}解析失败：${message}`);
   }
 }
 

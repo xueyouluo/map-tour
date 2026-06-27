@@ -42,6 +42,7 @@ npm run dev
 
 - 粘贴文字、Markdown、表格，或上传行程截图。
 - 后端使用 OpenAI client 解析行程，严格输出结构化 JSON。
+- 解析结果包含 `tripScope`，用于区分单城市、多城市或不确定行程，辅助高德 POI 匹配。
 - 浏览器端使用高德 JSAPI 匹配 POI 和规划路线。
 - 按天分色显示 Marker 和路线，短距离使用步行，失败时直线兜底。
 - 生成 `/s/:id` 分享页，数据保存在本地 SQLite 数据库 `data/map-tour.sqlite`。

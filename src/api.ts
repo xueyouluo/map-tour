@@ -3,6 +3,7 @@ import type { Itinerary } from './shared/itinerary';
 export interface RuntimeConfig {
   amapKey: string;
   hasAmapProxy: boolean;
+  hasAiRuntime: boolean;
   hasOpenAI: boolean;
 }
 
