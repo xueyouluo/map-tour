@@ -22,6 +22,7 @@ describe('ItineraryStore', () => {
 
     expect(saved.id).not.toBe('draft');
     expect(loaded?.title).toBe('Test Trip');
+    expect(loaded?.shareStatus).toBe('draft');
     expect(loaded?.createdAt).toBeTruthy();
 
     const second = normalizeParsedItinerary({
@@ -41,6 +42,7 @@ describe('ItineraryStore', () => {
     expect(summaries).toHaveLength(2);
     expect(summaries.map((item) => item.title)).toEqual(expect.arrayContaining(['Test Trip', 'Second Trip']));
     expect(summaries.find((item) => item.title === 'Second Trip')?.stopCount).toBe(4);
+    expect(summaries.every((item) => item.shareStatus === 'draft')).toBe(true);
 
     store.close();
     await rm(dir, { recursive: true, force: true });

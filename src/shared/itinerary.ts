@@ -4,6 +4,7 @@ export type MatchStatus = 'pending' | 'matched' | 'unmatched';
 export type RouteMode = 'driving' | 'walking' | 'transit' | 'straight';
 export type RoutePreference = 'auto' | 'driving' | 'walking' | 'transit';
 export type RouteStatus = 'complete' | 'fallback' | 'failed';
+export type ShareStatus = 'draft' | 'shared';
 
 export interface DateRange {
   start?: string;
@@ -82,6 +83,7 @@ export interface Itinerary {
   days: ItineraryDay[];
   alternatives: Stop[];
   routeSegments: RouteSegment[];
+  shareStatus?: ShareStatus;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -94,6 +96,7 @@ export interface ItinerarySummary {
   tripScope?: TripScope;
   daysCount: number;
   stopCount: number;
+  shareStatus: ShareStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,7 +196,8 @@ export function normalizeParsedItinerary(parsed: ParsedItinerary, id = 'draft'):
     tripScope: normalizeTripScope(parsed.tripScope),
     days,
     alternatives,
-    routeSegments: []
+    routeSegments: [],
+    shareStatus: 'draft'
   };
 }
 

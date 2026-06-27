@@ -1,5 +1,5 @@
 import { ArrowLeft, BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, History as HistoryIcon, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
 import { enrichItineraryWithAmap, loadAMap } from './amap';
 import { getConfig, listItineraries, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
 import {
@@ -11,6 +11,7 @@ import {
   type ItineraryDay,
   type ItinerarySummary,
   type RoutePreference,
+  type ShareStatus,
   type Stop,
   type TripScope
 } from './shared/itinerary';
@@ -126,7 +127,17 @@ function MainApp({ pathname }: { pathname: string }) {
       const result = await parseItineraryStream(text, image, (event) => {
         handleParseStreamEvent(event, setParseStatus, lastParseEventAtRef);
       });
-      setItinerary(result.itinerary);
+      let nextItinerary: Itinerary = {
+        ...result.itinerary,
+        shareStatus: 'draft'
+      };
+      try {
+        const saved = await saveItinerary(nextItinerary);
+        nextItinerary = saved.itinerary;
+      } catch (saveError) {
+        setError(`草稿保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`);
+      }
+      setItinerary(nextItinerary);
       setActiveDay('all');
       setRoutePreference('auto');
       setConnectDays(false);
@@ -147,7 +158,10 @@ function MainApp({ pathname }: { pathname: string }) {
     setCopyStatus('idle');
     setIsSharing(true);
     try {
-      const result = await saveItinerary(itinerary);
+      const result = await saveItinerary({
+        ...itinerary,
+        shareStatus: 'shared'
+      });
       const absoluteUrl = new URL(result.shareUrl, window.location.origin).toString();
       setItinerary(result.itinerary);
       setShareUrl(absoluteUrl);
@@ -194,9 +208,27 @@ function MainApp({ pathname }: { pathname: string }) {
       : current);
   }
 
+  const saveHistoryRecord = useCallback((next: Itinerary, shareStatus: ShareStatus) => {
+    if (readOnly || next.id === 'draft') return;
+    saveItinerary({
+      ...next,
+      shareStatus
+    }).catch((saveError) => {
+      setError(`历史保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`);
+    });
+  }, [readOnly]);
+
+  const handleItineraryChange = useCallback((next: Itinerary) => {
+    setItinerary(next);
+    saveHistoryRecord(next, next.shareStatus || 'draft');
+  }, [saveHistoryRecord]);
+
   function handleStopDelete(stopId: string) {
     setSelectedStopId(null);
-    setItinerary((current) => (current ? removeStopFromItinerary(current, stopId) : current));
+    if (!itinerary) return;
+    const next = removeStopFromItinerary(itinerary, stopId);
+    setItinerary(next);
+    saveHistoryRecord(next, next.shareStatus || 'draft');
   }
 
   const visibleDays = itinerary ? getVisibleDays(itinerary, activeDay) : [];
@@ -237,7 +269,7 @@ function MainApp({ pathname }: { pathname: string }) {
           itinerary={itinerary}
           activeDay={activeDay}
           onDayChange={setActiveDay}
-          onItineraryChange={setItinerary}
+          onItineraryChange={handleItineraryChange}
           routePreference={routePreference}
           connectDays={connectDays}
           showRoutes={showRoutes}
@@ -303,7 +335,7 @@ function HistoryPage() {
           </div>
           <div>
             <h1>历史行程</h1>
-            <p>这里显示已经生成过分享链接的行程，数据来自本地 SQLite。</p>
+            <p>这里显示解析后自动保存的草稿，以及已经生成分享链接的行程。</p>
           </div>
         </section>
 
@@ -322,6 +354,9 @@ function HistoryPage() {
             {items.map((item) => (
               <a className="history-card" key={item.id} href={`/s/${encodeURIComponent(item.id)}`}>
                 <div className="history-card-main">
+                  <span className={`history-status-badge ${item.shareStatus}`}>
+                    {item.shareStatus === 'shared' ? '已分享' : '草稿'}
+                  </span>
                   <h2>{item.title}</h2>
                   <div className="date-line">
                     <CalendarDays size={15} />

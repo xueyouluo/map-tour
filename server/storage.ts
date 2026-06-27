@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Itinerary, ItinerarySummary } from '../src/shared/itinerary';
+import type { Itinerary, ItinerarySummary, ShareStatus } from '../src/shared/itinerary';
 
 export interface StoredItinerary extends Itinerary {
   id: string;
@@ -61,6 +61,7 @@ export class ItineraryStore {
     const record: StoredItinerary = {
       ...itinerary,
       id,
+      shareStatus: normalizeShareStatus(itinerary.shareStatus) || 'draft',
       createdAt: previous?.created_at || now,
       updatedAt: now
     };
@@ -149,6 +150,7 @@ function rowToRecord(row: ItineraryRow): StoredItinerary {
   return {
     ...payload,
     id: row.id,
+    shareStatus: normalizeShareStatus(payload.shareStatus) || 'shared',
     createdAt: payload.createdAt || row.created_at,
     updatedAt: payload.updatedAt || row.updated_at
   };
@@ -164,7 +166,12 @@ function rowToSummary(row: ItineraryRow): ItinerarySummary {
     tripScope: record.tripScope,
     daysCount: record.days.length,
     stopCount: record.days.reduce((total, day) => total + day.stops.length + day.alternatives.length, 0) + record.alternatives.length,
+    shareStatus: record.shareStatus || 'shared',
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
+}
+
+function normalizeShareStatus(status?: string): ShareStatus | undefined {
+  return status === 'draft' || status === 'shared' ? status : undefined;
 }
