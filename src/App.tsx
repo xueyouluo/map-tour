@@ -70,6 +70,7 @@ function MainApp({ pathname }: { pathname: string }) {
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
   const [routePreference, setRoutePreference] = useState<RoutePreference>('auto');
   const [connectDays, setConnectDays] = useState(false);
+  const [showRoutes, setShowRoutes] = useState(true);
   const [showMapLabels, setShowMapLabels] = useState(true);
   const [parseStatus, setParseStatus] = useState('');
   const [isParsing, setIsParsing] = useState(false);
@@ -215,6 +216,8 @@ function MainApp({ pathname }: { pathname: string }) {
             onRoutePreferenceChange={handleRoutePreferenceChange}
             connectDays={connectDays}
             onConnectDaysChange={handleConnectDaysChange}
+            showRoutes={showRoutes}
+            onShowRoutesChange={setShowRoutes}
             showMapLabels={showMapLabels}
             onShowMapLabelsChange={setShowMapLabels}
             onShare={handleShare}
@@ -237,6 +240,7 @@ function MainApp({ pathname }: { pathname: string }) {
           onItineraryChange={setItinerary}
           routePreference={routePreference}
           connectDays={connectDays}
+          showRoutes={showRoutes}
           showMapLabels={showMapLabels}
           selectedStopId={selectedStopId}
           onStopSelect={setSelectedStopId}
@@ -491,6 +495,8 @@ function ItineraryPanel({
   onRoutePreferenceChange,
   connectDays,
   onConnectDaysChange,
+  showRoutes,
+  onShowRoutesChange,
   showMapLabels,
   onShowMapLabelsChange,
   onShare,
@@ -508,6 +514,8 @@ function ItineraryPanel({
   onRoutePreferenceChange: (preference: RoutePreference) => void;
   connectDays: boolean;
   onConnectDaysChange: (connectDays: boolean) => void;
+  showRoutes: boolean;
+  onShowRoutesChange: (show: boolean) => void;
   showMapLabels: boolean;
   onShowMapLabelsChange: (show: boolean) => void;
   onShare: () => void;
@@ -536,6 +544,8 @@ function ItineraryPanel({
         onRoutePreferenceChange={onRoutePreferenceChange}
         connectDays={connectDays}
         onConnectDaysChange={onConnectDaysChange}
+        showRoutes={showRoutes}
+        onShowRoutesChange={onShowRoutesChange}
         showMapLabels={showMapLabels}
         onShowMapLabelsChange={onShowMapLabelsChange}
         allowRouteChange={!readOnly}
@@ -669,6 +679,8 @@ function MapDisplayControls({
   onRoutePreferenceChange,
   connectDays,
   onConnectDaysChange,
+  showRoutes,
+  onShowRoutesChange,
   showMapLabels,
   onShowMapLabelsChange,
   allowRouteChange
@@ -677,6 +689,8 @@ function MapDisplayControls({
   onRoutePreferenceChange: (preference: RoutePreference) => void;
   connectDays: boolean;
   onConnectDaysChange: (connectDays: boolean) => void;
+  showRoutes: boolean;
+  onShowRoutesChange: (show: boolean) => void;
   showMapLabels: boolean;
   onShowMapLabelsChange: (show: boolean) => void;
   allowRouteChange: boolean;
@@ -713,6 +727,14 @@ function MapDisplayControls({
           </button>
         </div>
       )}
+      <label className="map-label-toggle">
+        <span>显示路线</span>
+        <input
+          type="checkbox"
+          checked={showRoutes}
+          onChange={(event) => onShowRoutesChange(event.target.checked)}
+        />
+      </label>
       <label className="map-label-toggle">
         <span>显示地点名称</span>
         <input
@@ -907,6 +929,7 @@ function MapView({
   onItineraryChange,
   routePreference,
   connectDays,
+  showRoutes,
   showMapLabels,
   selectedStopId,
   onStopSelect,
@@ -918,6 +941,7 @@ function MapView({
   onItineraryChange: (itinerary: Itinerary) => void;
   routePreference: RoutePreference;
   connectDays: boolean;
+  showRoutes: boolean;
   showMapLabels: boolean;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
@@ -1013,12 +1037,12 @@ function MapView({
     }
 
     if (!itinerary) return;
-    const drawResult = drawItinerary(AMap, map, itinerary, activeDay, onStopSelect, showMapLabels);
+    const drawResult = drawItinerary(AMap, map, itinerary, activeDay, onStopSelect, showRoutes, showMapLabels);
     const overlays = drawResult.overlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
     if (overlays.length) map.setFitView(overlays, false, getMapFitPadding());
-  }, [itinerary, activeDay, onStopSelect, mapReady, showMapLabels]);
+  }, [itinerary, activeDay, onStopSelect, mapReady, showRoutes, showMapLabels]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1082,6 +1106,7 @@ function drawItinerary(
   itinerary: Itinerary,
   activeDay: ActiveDay,
   onStopSelect: (stopId: string) => void,
+  showRoutes: boolean,
   showMapLabels: boolean
 ) {
   const overlays: any[] = [];
@@ -1089,27 +1114,29 @@ function drawItinerary(
   const days = getVisibleDays(itinerary, activeDay);
   const dayIndexes = new Set(days.map((day) => day.dayIndex));
 
-  for (const segment of itinerary.routeSegments) {
-    if (segment.isInterDay) {
-      if (activeDay !== 'all') continue;
-    } else if (activeDay !== 'all' && segment.dayIndex !== activeDay) {
-      continue;
+  if (showRoutes) {
+    for (const segment of itinerary.routeSegments) {
+      if (segment.isInterDay) {
+        if (activeDay !== 'all') continue;
+      } else if (activeDay !== 'all' && segment.dayIndex !== activeDay) {
+        continue;
+      }
+      if (segment.path.length < 2) continue;
+      const color = colorForDay(segment.dayIndex);
+      const line = new AMap.Polyline({
+        path: segment.path,
+        strokeColor: color,
+        strokeWeight: segment.mode === 'walking' ? 5 : segment.mode === 'transit' ? 6 : 7,
+        strokeOpacity: segment.status === 'fallback' || segment.isInterDay ? 0.68 : 0.88,
+        strokeStyle: segment.status === 'fallback' || segment.mode === 'walking' || segment.isInterDay ? 'dashed' : 'solid',
+        strokeDasharray: segment.isInterDay ? [14, 9] : [10, 7],
+        lineJoin: 'round',
+        lineCap: 'round',
+        zIndex: segment.isInterDay ? 18 : 20
+      });
+      map.add(line);
+      overlays.push(line);
     }
-    if (segment.path.length < 2) continue;
-    const color = colorForDay(segment.dayIndex);
-    const line = new AMap.Polyline({
-      path: segment.path,
-      strokeColor: color,
-      strokeWeight: segment.mode === 'walking' ? 5 : segment.mode === 'transit' ? 6 : 7,
-      strokeOpacity: segment.status === 'fallback' || segment.isInterDay ? 0.68 : 0.88,
-      strokeStyle: segment.status === 'fallback' || segment.mode === 'walking' || segment.isInterDay ? 'dashed' : 'solid',
-      strokeDasharray: segment.isInterDay ? [14, 9] : [10, 7],
-      lineJoin: 'round',
-      lineCap: 'round',
-      zIndex: segment.isInterDay ? 18 : 20
-    });
-    map.add(line);
-    overlays.push(line);
   }
 
   const infoWindow = new AMap.InfoWindow({
