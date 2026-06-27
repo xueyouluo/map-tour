@@ -6,15 +6,16 @@
   "scripts": {
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite --host 0.0.0.0",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
-    "start": "NODE_ENV=production tsx server/index.ts"
+    "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
+    "start": "NODE_OPTIONS=--no-warnings=ExperimentalWarning NODE_ENV=production tsx server/index.ts"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "lucide-react": "^0.468.0",

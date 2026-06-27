@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import type { Itinerary } from '../src/shared/itinerary';
 
 export interface StoredItinerary extends Itinerary {
@@ -20,7 +20,7 @@ interface ItineraryRow {
 }
 
 export class ItineraryStore {
-  private db?: Database.Database;
+  private db?: DatabaseSync;
 
   constructor(
     private readonly dbPath = path.resolve(process.cwd(), process.env.SQLITE_DB_PATH || 'data/map-tour.sqlite'),
@@ -28,7 +28,7 @@ export class ItineraryStore {
   ) {}
 
   async list(): Promise<Store> {
-    const rows = this.database().prepare('select * from itineraries order by created_at asc').all() as ItineraryRow[];
+    const rows = this.database().prepare('select * from itineraries order by created_at asc').all() as unknown as ItineraryRow[];
     return rows.reduce<Store>((store, row) => {
       const record = rowToRecord(row);
       store[record.id] = record;
@@ -37,7 +37,9 @@ export class ItineraryStore {
   }
 
   async get(id: string): Promise<StoredItinerary | null> {
-    const row = this.database().prepare('select * from itineraries where id = ?').get(id) as ItineraryRow | undefined;
+    const row = this.database().prepare('select * from itineraries where id = ?').get(id) as unknown as
+      | ItineraryRow
+      | undefined;
     return row ? rowToRecord(row) : null;
   }
 
@@ -45,7 +47,7 @@ export class ItineraryStore {
     const db = this.database();
     const id = itinerary.id && itinerary.id !== 'draft' ? itinerary.id : createShareId();
     const now = new Date().toISOString();
-    const previous = db.prepare('select created_at from itineraries where id = ?').get(id) as
+    const previous = db.prepare('select created_at from itineraries where id = ?').get(id) as unknown as
       | { created_at: string }
       | undefined;
     const record: StoredItinerary = {
@@ -57,16 +59,11 @@ export class ItineraryStore {
 
     db.prepare(
       `insert into itineraries (id, payload, created_at, updated_at)
-       values (@id, @payload, @createdAt, @updatedAt)
+       values (?, ?, ?, ?)
        on conflict(id) do update set
          payload = excluded.payload,
          updated_at = excluded.updated_at`
-    ).run({
-      id,
-      payload: JSON.stringify(record),
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt
-    });
+    ).run(id, JSON.stringify(record), record.createdAt, record.updatedAt);
 
     return record;
   }
@@ -76,28 +73,26 @@ export class ItineraryStore {
     this.db = undefined;
   }
 
-  private database(): Database.Database {
+  private database(): DatabaseSync {
     if (!this.db) {
       mkdirSync(path.dirname(this.dbPath), { recursive: true });
-      this.db = new Database(this.dbPath);
-      this.db.pragma('journal_mode = WAL');
-      this.db
-        .prepare(
-          `create table if not exists itineraries (
+      this.db = new DatabaseSync(this.dbPath);
+      this.db.exec(`
+        pragma journal_mode = WAL;
+        create table if not exists itineraries (
             id text primary key,
             payload text not null,
             created_at text not null,
             updated_at text not null
-          )`
-        )
-        .run();
+          );
+      `);
       this.migrateLegacyJsonIfNeeded(this.db);
     }
     return this.db;
   }
 
-  private migrateLegacyJsonIfNeeded(db: Database.Database): void {
-    const row = db.prepare('select count(*) as count from itineraries').get() as { count: number };
+  private migrateLegacyJsonIfNeeded(db: DatabaseSync): void {
+    const row = db.prepare('select count(*) as count from itineraries').get() as unknown as { count: number };
     if (row.count > 0 || !existsSync(this.legacyJsonPath)) {
       return;
     }
@@ -115,23 +110,21 @@ export class ItineraryStore {
 
       const insert = db.prepare(
         `insert or ignore into itineraries (id, payload, created_at, updated_at)
-         values (@id, @payload, @createdAt, @updatedAt)`
+         values (?, ?, ?, ?)`
       );
-      const migrate = db.transaction((items: StoredItinerary[]) => {
-        for (const item of items) {
+      db.exec('begin');
+      try {
+        for (const item of records) {
           const createdAt = item.createdAt || new Date().toISOString();
           const updatedAt = item.updatedAt || createdAt;
           const record = { ...item, createdAt, updatedAt };
-          insert.run({
-            id: record.id,
-            payload: JSON.stringify(record),
-            createdAt,
-            updatedAt
-          });
+          insert.run(record.id, JSON.stringify(record), createdAt, updatedAt);
         }
-      });
-
-      migrate(records);
+        db.exec('commit');
+      } catch (error) {
+        db.exec('rollback');
+        throw error;
+      }
       console.info(`Imported ${records.length} legacy itineraries into ${this.dbPath}`);
     } catch (error) {
       console.warn('Failed to import legacy itinerary JSON data:', error);
