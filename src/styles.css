@@ -1116,6 +1116,13 @@ textarea:focus {
     display: none;
   }
 
+  .side-panel.no-itinerary .panel-header,
+  .side-panel.no-itinerary .import-box,
+  .side-panel.no-itinerary .empty-panel,
+  .side-panel.no-itinerary .status-block {
+    display: block;
+  }
+
   .side-panel::before {
     display: none;
   }

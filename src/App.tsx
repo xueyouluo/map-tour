@@ -236,19 +236,22 @@ function MainApp({ pathname }: { pathname: string }) {
 
   const visibleDays = itinerary ? getVisibleDays(itinerary, activeDay) : [];
   const hasItinerary = Boolean(itinerary);
+  const effectiveMobileSheetMode: MobileSheetMode = hasItinerary ? mobileSheetMode : 'expanded';
 
   return (
-    <div className={`app-shell ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${mobileSheetMode}`}>
-      <aside className={`side-panel ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} ${mobileSheetMode}`} aria-label="行程">
-        <button
-          className="mobile-sheet-toggle"
-          type="button"
-          aria-label={mobileSheetMode === 'expanded' ? '收起行程面板' : '展开行程面板'}
-          onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'collapsed' : 'expanded'))}
-        >
-          {mobileSheetMode === 'expanded' ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-          {mobileSheetMode === 'expanded' ? '收起地图模式' : '展开行程详情'}
-        </button>
+    <div className={`app-shell ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${effectiveMobileSheetMode}`}>
+      <aside className={`side-panel ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} ${effectiveMobileSheetMode}`} aria-label="行程">
+        {hasItinerary && (
+          <button
+            className="mobile-sheet-toggle"
+            type="button"
+            aria-label={mobileSheetMode === 'expanded' ? '进入地图模式' : '展开行程详情'}
+            onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'collapsed' : 'expanded'))}
+          >
+            {mobileSheetMode === 'expanded' ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+            {mobileSheetMode === 'expanded' ? '进入地图模式' : '展开行程详情'}
+          </button>
+        )}
         <PanelHeader readOnly={readOnly} />
         {!readOnly && <ImportPanel onParse={handleParse} busy={isParsing} progressMessage={isParsing ? parseStatus : ''} />}
         {itinerary && (
