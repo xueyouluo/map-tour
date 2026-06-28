@@ -363,13 +363,15 @@ function HistoryPage() {
                     <span>{formatHistoryDateRange(item)}</span>
                   </div>
                   <TripScopeLine scope={item.tripScope} />
+                  <div className="history-card-meta">
+                    <span>{item.daysCount} 天</span>
+                    <span>{item.stopCount} 个地点</span>
+                    <span>更新于 {formatHistoryTime(item.updatedAt)}</span>
+                  </div>
                 </div>
-                <div className="history-card-meta">
-                  <span>{item.daysCount} 天</span>
-                  <span>{item.stopCount} 个地点</span>
-                  <span>更新于 {formatHistoryTime(item.updatedAt)}</span>
-                </div>
-                <ExternalLink size={17} />
+                <span className="history-open-icon" aria-hidden="true">
+                  <ExternalLink size={17} />
+                </span>
               </a>
             ))}
           </div>
