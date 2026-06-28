@@ -19,7 +19,7 @@ import {
 type ActiveDay = number | 'all';
 type AMapNamespace = any;
 type CopyStatus = 'idle' | 'copied' | 'failed';
-type MobileSheetMode = 'peek' | 'expanded';
+type MobileSheetMode = 'collapsed' | 'expanded';
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function formatParseProgress(hasImage: boolean, elapsedMs: number): string {
@@ -72,7 +72,7 @@ function MainApp({ pathname }: { pathname: string }) {
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
   const [routePreference, setRoutePreference] = useState<RoutePreference>('auto');
   const [connectDays, setConnectDays] = useState(false);
-  const [mobileSheetMode, setMobileSheetMode] = useState<MobileSheetMode>('peek');
+  const [mobileSheetMode, setMobileSheetMode] = useState<MobileSheetMode>('collapsed');
   const [showRoutes, setShowRoutes] = useState(true);
   const [showMapLabels, setShowMapLabels] = useState(true);
   const [parseStatus, setParseStatus] = useState('');
@@ -143,7 +143,7 @@ function MainApp({ pathname }: { pathname: string }) {
       setActiveDay('all');
       setRoutePreference('auto');
       setConnectDays(false);
-      setMobileSheetMode('peek');
+      setMobileSheetMode('collapsed');
       setSelectedStopId(null);
       setParseStatus(result.warning || '');
     } catch (err) {
@@ -244,10 +244,10 @@ function MainApp({ pathname }: { pathname: string }) {
           className="mobile-sheet-toggle"
           type="button"
           aria-label={mobileSheetMode === 'expanded' ? '收起行程面板' : '展开行程面板'}
-          onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'peek' : 'expanded'))}
+          onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'collapsed' : 'expanded'))}
         >
           {mobileSheetMode === 'expanded' ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-          {mobileSheetMode === 'expanded' ? '收起' : '展开'}
+          {mobileSheetMode === 'expanded' ? '收起地图模式' : '展开行程详情'}
         </button>
         <PanelHeader readOnly={readOnly} />
         {!readOnly && <ImportPanel onParse={handleParse} busy={isParsing} progressMessage={isParsing ? parseStatus : ''} />}
@@ -285,7 +285,6 @@ function MainApp({ pathname }: { pathname: string }) {
           onItineraryChange={handleItineraryChange}
           routePreference={routePreference}
           connectDays={connectDays}
-          mobileSheetMode={mobileSheetMode}
           showRoutes={showRoutes}
           showMapLabels={showMapLabels}
           selectedStopId={selectedStopId}
@@ -1000,7 +999,6 @@ function MapView({
   onItineraryChange,
   routePreference,
   connectDays,
-  mobileSheetMode,
   showRoutes,
   showMapLabels,
   selectedStopId,
@@ -1013,7 +1011,6 @@ function MapView({
   onItineraryChange: (itinerary: Itinerary) => void;
   routePreference: RoutePreference;
   connectDays: boolean;
-  mobileSheetMode: MobileSheetMode;
   showRoutes: boolean;
   showMapLabels: boolean;
   selectedStopId: string | null;
@@ -1114,19 +1111,10 @@ function MapView({
     const overlays = drawResult.overlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
-    let fitTimer: number | undefined;
     if (overlays.length) {
       map.setFitView(overlays, false, getMapFitPadding());
-      if (window.matchMedia('(max-width: 760px)').matches) {
-        fitTimer = window.setTimeout(() => {
-          map.setFitView(overlays, false, getMapFitPadding());
-        }, 220);
-      }
     }
-    return () => {
-      if (fitTimer) window.clearTimeout(fitTimer);
-    };
-  }, [itinerary, activeDay, onStopSelect, mapReady, mobileSheetMode, showRoutes, showMapLabels]);
+  }, [itinerary, activeDay, onStopSelect, mapReady, showRoutes, showMapLabels]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1171,23 +1159,7 @@ function getMapFitPadding(): [number, number, number, number] {
     return [90, 90, 120, 90];
   }
 
-  const panelRect = visibleRect(document.querySelector('.side-panel'));
-  const filterRect = visibleRect(document.querySelector('.map-day-filter'));
-  const coveredTop = Math.min(
-    panelRect?.top ?? Number.POSITIVE_INFINITY,
-    filterRect?.top ?? Number.POSITIVE_INFINITY
-  );
-  const bottom = Number.isFinite(coveredTop)
-    ? Math.max(220, Math.round(window.innerHeight - coveredTop + 28))
-    : Math.round(Math.min(window.innerHeight * 0.64, 620) + 86);
-
-  return [72, 34, bottom, 34];
-}
-
-function visibleRect(element: Element | null): DOMRect | null {
-  const rect = element?.getBoundingClientRect();
-  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
-  return rect;
+  return [86, 28, 128, 28];
 }
 
 function drawItinerary(

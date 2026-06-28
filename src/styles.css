@@ -1090,8 +1090,7 @@ textarea:focus {
     right: 0;
     bottom: 0;
     z-index: 40;
-    height: min(38vh, 380px);
-    height: min(38svh, 380px);
+    height: 48px;
     max-height: 76vh;
     max-height: 76svh;
     overscroll-behavior: contain;
@@ -1109,6 +1108,14 @@ textarea:focus {
     height: min(72svh, 720px);
   }
 
+  .side-panel.collapsed .panel-header,
+  .side-panel.collapsed .import-box,
+  .side-panel.collapsed .itinerary-content,
+  .side-panel.collapsed .empty-panel,
+  .side-panel.collapsed .status-block {
+    display: none;
+  }
+
   .side-panel::before {
     display: none;
   }
@@ -1119,16 +1126,16 @@ textarea:focus {
     z-index: 6;
     display: flex;
     width: 100%;
-    height: 30px;
+    height: 48px;
     align-items: center;
     justify-content: center;
     gap: 5px;
     border: 0;
-    border-bottom: 1px solid rgba(220, 226, 238, 0.9);
+    border-bottom: 0;
     border-radius: 16px 16px 0 0;
     background: rgba(248, 249, 252, 0.96);
     color: #536075;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 900;
     backdrop-filter: blur(10px);
   }
@@ -1271,7 +1278,7 @@ textarea:focus {
 
   .itinerary-content > .day-selector {
     position: sticky;
-    top: 30px;
+    top: 48px;
     z-index: 5;
     margin: 0 0 8px;
     box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
@@ -1343,6 +1350,12 @@ textarea:focus {
   }
 
   .map-day-filter {
+    bottom: 60px;
+    width: calc(100% - 24px);
+  }
+
+  .mobile-sheet-expanded .map-day-filter,
+  .no-itinerary .map-day-filter {
     display: none;
   }
 
