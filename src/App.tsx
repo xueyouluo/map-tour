@@ -1,4 +1,4 @@
-import { ArrowLeft, BusFront, CalendarDays, Car, Check, Copy, ExternalLink, FileImage, Footprints, History as HistoryIcon, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, BusFront, CalendarDays, Car, Check, ChevronDown, ChevronUp, Copy, ExternalLink, FileImage, Footprints, History as HistoryIcon, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
 import { enrichItineraryWithAmap, loadAMap } from './amap';
 import { getConfig, listItineraries, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
@@ -19,6 +19,7 @@ import {
 type ActiveDay = number | 'all';
 type AMapNamespace = any;
 type CopyStatus = 'idle' | 'copied' | 'failed';
+type MobileSheetMode = 'peek' | 'expanded';
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function formatParseProgress(hasImage: boolean, elapsedMs: number): string {
@@ -71,6 +72,7 @@ function MainApp({ pathname }: { pathname: string }) {
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
   const [routePreference, setRoutePreference] = useState<RoutePreference>('auto');
   const [connectDays, setConnectDays] = useState(false);
+  const [mobileSheetMode, setMobileSheetMode] = useState<MobileSheetMode>('peek');
   const [showRoutes, setShowRoutes] = useState(true);
   const [showMapLabels, setShowMapLabels] = useState(true);
   const [parseStatus, setParseStatus] = useState('');
@@ -141,6 +143,7 @@ function MainApp({ pathname }: { pathname: string }) {
       setActiveDay('all');
       setRoutePreference('auto');
       setConnectDays(false);
+      setMobileSheetMode('peek');
       setSelectedStopId(null);
       setParseStatus(result.warning || '');
     } catch (err) {
@@ -232,10 +235,20 @@ function MainApp({ pathname }: { pathname: string }) {
   }
 
   const visibleDays = itinerary ? getVisibleDays(itinerary, activeDay) : [];
+  const hasItinerary = Boolean(itinerary);
 
   return (
-    <div className="app-shell">
-      <aside className="side-panel" aria-label="行程">
+    <div className={`app-shell ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${mobileSheetMode}`}>
+      <aside className={`side-panel ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} ${mobileSheetMode}`} aria-label="行程">
+        <button
+          className="mobile-sheet-toggle"
+          type="button"
+          aria-label={mobileSheetMode === 'expanded' ? '收起行程面板' : '展开行程面板'}
+          onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'peek' : 'expanded'))}
+        >
+          {mobileSheetMode === 'expanded' ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          {mobileSheetMode === 'expanded' ? '收起' : '展开'}
+        </button>
         <PanelHeader readOnly={readOnly} />
         {!readOnly && <ImportPanel onParse={handleParse} busy={isParsing} progressMessage={isParsing ? parseStatus : ''} />}
         {itinerary && (
@@ -272,6 +285,7 @@ function MainApp({ pathname }: { pathname: string }) {
           onItineraryChange={handleItineraryChange}
           routePreference={routePreference}
           connectDays={connectDays}
+          mobileSheetMode={mobileSheetMode}
           showRoutes={showRoutes}
           showMapLabels={showMapLabels}
           selectedStopId={selectedStopId}
@@ -563,10 +577,24 @@ function ItineraryPanel({
   readOnly: boolean;
 }) {
   const pendingPoi = hasPendingPoiMatches(itinerary);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  const dayRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const visibleDayKey = visibleDays.map((day) => day.dayIndex).join(',');
+
+  useEffect(() => {
+    if (!window.matchMedia('(max-width: 760px)').matches) return;
+    const target = activeDay === 'all' ? summaryRef.current : dayRefs.current.get(activeDay);
+    if (!target) return;
+
+    const timer = window.setTimeout(() => {
+      target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [activeDay, visibleDayKey]);
 
   return (
     <section className="itinerary-content">
-      <div className="trip-summary">
+      <div className="trip-summary" ref={summaryRef}>
         <h2>{itinerary.title}</h2>
         <div className="date-line">
           <CalendarDays size={16} />
@@ -592,6 +620,10 @@ function ItineraryPanel({
         {visibleDays.map((day) => (
           <DaySection
             key={day.dayIndex}
+            sectionRef={(node) => {
+              if (node) dayRefs.current.set(day.dayIndex, node);
+              else dayRefs.current.delete(day.dayIndex);
+            }}
             day={day}
             selectedStopId={selectedStopId}
             onStopSelect={onStopSelect}
@@ -786,18 +818,20 @@ function MapDisplayControls({
 
 function DaySection({
   day,
+  sectionRef,
   selectedStopId,
   onStopSelect,
   onStopDelete
 }: {
   day: ItineraryDay;
+  sectionRef?: (node: HTMLDivElement | null) => void;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete?: (stopId: string) => void;
 }) {
   const color = colorForDay(day.dayIndex);
   return (
-    <div className="day-section" style={{ '--day-color': color } as React.CSSProperties}>
+    <div ref={sectionRef} className="day-section" style={{ '--day-color': color } as React.CSSProperties}>
       <div className="day-heading">
         <span>D{day.dayIndex}</span>
         <div>
@@ -966,6 +1000,7 @@ function MapView({
   onItineraryChange,
   routePreference,
   connectDays,
+  mobileSheetMode,
   showRoutes,
   showMapLabels,
   selectedStopId,
@@ -978,6 +1013,7 @@ function MapView({
   onItineraryChange: (itinerary: Itinerary) => void;
   routePreference: RoutePreference;
   connectDays: boolean;
+  mobileSheetMode: MobileSheetMode;
   showRoutes: boolean;
   showMapLabels: boolean;
   selectedStopId: string | null;
@@ -1078,8 +1114,19 @@ function MapView({
     const overlays = drawResult.overlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
-    if (overlays.length) map.setFitView(overlays, false, getMapFitPadding());
-  }, [itinerary, activeDay, onStopSelect, mapReady, showRoutes, showMapLabels]);
+    let fitTimer: number | undefined;
+    if (overlays.length) {
+      map.setFitView(overlays, false, getMapFitPadding());
+      if (window.matchMedia('(max-width: 760px)').matches) {
+        fitTimer = window.setTimeout(() => {
+          map.setFitView(overlays, false, getMapFitPadding());
+        }, 220);
+      }
+    }
+    return () => {
+      if (fitTimer) window.clearTimeout(fitTimer);
+    };
+  }, [itinerary, activeDay, onStopSelect, mapReady, mobileSheetMode, showRoutes, showMapLabels]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1124,8 +1171,8 @@ function getMapFitPadding(): [number, number, number, number] {
     return [90, 90, 120, 90];
   }
 
-  const panelRect = document.querySelector('.side-panel')?.getBoundingClientRect();
-  const filterRect = document.querySelector('.map-day-filter')?.getBoundingClientRect();
+  const panelRect = visibleRect(document.querySelector('.side-panel'));
+  const filterRect = visibleRect(document.querySelector('.map-day-filter'));
   const coveredTop = Math.min(
     panelRect?.top ?? Number.POSITIVE_INFINITY,
     filterRect?.top ?? Number.POSITIVE_INFINITY
@@ -1135,6 +1182,12 @@ function getMapFitPadding(): [number, number, number, number] {
     : Math.round(Math.min(window.innerHeight * 0.64, 620) + 86);
 
   return [72, 34, bottom, 34];
+}
+
+function visibleRect(element: Element | null): DOMRect | null {
+  const rect = element?.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  return rect;
 }
 
 function drawItinerary(

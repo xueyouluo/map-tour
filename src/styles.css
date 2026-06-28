@@ -47,6 +47,10 @@ button {
   background: #f8f9fc;
 }
 
+.mobile-sheet-toggle {
+  display: none;
+}
+
 .panel-header {
   padding: 26px 28px 20px;
   border-bottom: 1px solid #dfe4ee;
@@ -1071,10 +1075,13 @@ textarea:focus {
 @media (max-width: 760px) {
   .app-shell {
     display: block;
+    height: 100vh;
+    height: 100dvh;
   }
 
   .map-stage {
     height: 100vh;
+    height: 100dvh;
   }
 
   .side-panel {
@@ -1083,38 +1090,70 @@ textarea:focus {
     right: 0;
     bottom: 0;
     z-index: 40;
-    height: min(64vh, 620px);
+    height: min(38vh, 380px);
+    height: min(38svh, 380px);
+    max-height: 76vh;
+    max-height: 76svh;
+    overscroll-behavior: contain;
     border-top: 1px solid #d7dce8;
     border-right: 0;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -10px 32px rgba(14, 23, 42, 0.16);
+    transition: height 180ms ease;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .side-panel.expanded,
+  .side-panel.no-itinerary {
+    height: min(72vh, 720px);
+    height: min(72svh, 720px);
   }
 
   .side-panel::before {
-    content: "";
+    display: none;
+  }
+
+  .mobile-sheet-toggle {
     position: sticky;
-    top: 8px;
-    z-index: 2;
-    display: block;
-    width: 42px;
-    height: 5px;
-    margin: 8px auto 0;
-    border-radius: 999px;
-    background: #c2cad8;
+    top: 0;
+    z-index: 6;
+    display: flex;
+    width: 100%;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 0;
+    border-bottom: 1px solid rgba(220, 226, 238, 0.9);
+    border-radius: 16px 16px 0 0;
+    background: rgba(248, 249, 252, 0.96);
+    color: #536075;
+    font-size: 12px;
+    font-weight: 900;
+    backdrop-filter: blur(10px);
   }
 
   .panel-header {
-    padding: 12px 18px 14px;
+    padding: 10px 16px 10px;
   }
 
   .panel-header h1 {
-    margin-top: 10px;
-    font-size: 24px;
+    margin: 8px 0 4px;
+    font-size: 20px;
   }
 
   .panel-header p {
     margin: 0;
     font-size: 13px;
+  }
+
+  .app-shell.read-only .panel-header {
+    padding: 8px 16px 5px;
+  }
+
+  .app-shell.read-only .panel-header h1,
+  .app-shell.read-only .panel-header p {
+    display: none;
   }
 
   .history-header {
@@ -1204,7 +1243,7 @@ textarea:focus {
   .import-box,
   .itinerary-content,
   .empty-panel {
-    padding: 14px 16px;
+    padding: 10px 16px 14px;
   }
 
   textarea {
@@ -1212,16 +1251,99 @@ textarea:focus {
   }
 
   .trip-summary h2 {
-    font-size: 21px;
+    font-size: 19px;
+    line-height: 1.2;
+  }
+
+  .trip-summary {
+    padding-bottom: 9px;
+    scroll-margin-top: 46px;
+  }
+
+  .trip-summary .date-line {
+    font-size: 13px;
+  }
+
+  .trip-summary .trip-scope-line {
+    margin-top: 7px;
+    padding: 5px 8px;
+  }
+
+  .itinerary-content > .day-selector {
+    position: sticky;
+    top: 30px;
+    z-index: 5;
+    margin: 0 0 8px;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  }
+
+  .day-selector {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .day-selector button {
+    min-width: 54px;
+    height: 30px;
+    font-size: 12px;
+  }
+
+  .map-controls-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px;
+  }
+
+  .route-mode-selector {
+    grid-column: 1 / -1;
+    gap: 6px;
+  }
+
+  .route-mode-title {
+    display: none;
+  }
+
+  .route-mode-options {
+    gap: 4px;
+  }
+
+  .route-mode-options button {
+    height: 30px;
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .inter-day-toggle {
+    height: 30px;
+    font-size: 11px;
+  }
+
+  .map-label-toggle {
+    min-height: 32px;
+    border: 1px solid #d7deeb;
+    border-radius: 7px;
+    padding: 0 8px;
+    background: #f8fafd;
+    font-size: 11px;
+  }
+
+  .map-label-toggle input {
+    width: 16px;
+    height: 16px;
   }
 
   .day-list {
+    padding-top: 12px;
     padding-bottom: 76px;
   }
 
+  .day-section {
+    scroll-margin-top: 76px;
+  }
+
   .map-day-filter {
-    bottom: calc(min(64vh, 620px) + 12px);
-    width: calc(100% - 24px);
+    display: none;
   }
 
   .map-toast {
