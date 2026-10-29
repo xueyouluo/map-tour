@@ -1,0 +1,329 @@
+.app-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid #d9e2ee;
+  border-radius: 18px;
+  background: #f5f7fb;
+  color: #26364b;
+  box-shadow: 0 30px 100px #060d1a66;
+  overflow: auto;
+  color-scheme: light;
+}
+.app-dialog.wide {
+  width: min(880px, calc(100vw - 32px));
+}
+.app-dialog::backdrop {
+  background: #091424a6;
+  backdrop-filter: blur(5px);
+}
+.app-dialog-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 26px;
+  background: #f5f7fbf5;
+  border-bottom: 1px solid #e0e7f0;
+}
+.app-dialog-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+}
+.settings-icon {
+  display: grid;
+  place-items: center;
+  border: 1px solid #dce3ee;
+  border-radius: 9px;
+  width: 34px;
+  height: 34px;
+  background: #fff;
+  color: #52657e;
+  cursor: pointer;
+}
+.new-trip-body {
+  padding: 22px 26px;
+}
+.new-trip-body > p {
+  margin: 0 0 20px;
+  color: #60728b;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.new-trip-body .import-box {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.new-trip-body textarea {
+  min-height: 180px;
+  background: #fff;
+  color: #23364c;
+  border: 1px solid #d7e1ed;
+}
+.new-trip-body .field-label {
+  color: #314762;
+}
+.new-trip-body .primary-button {
+  background: #3b65d5;
+  color: #fff;
+  border: 0;
+}
+.new-trip-body .file-button {
+  background: #fff;
+  color: #3e5679;
+  border-color: #d7e1ed;
+}
+.settings-panel {
+  padding: 24px 26px;
+}
+.settings-intro {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 22px;
+  color: #3963cf;
+}
+.settings-intro svg {
+  flex-shrink: 0;
+}
+.settings-intro strong {
+  font-size: 16px;
+  color: #273b58;
+}
+.settings-intro p,
+.settings-card > p {
+  color: #63768e;
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 7px 0 0;
+}
+.settings-fields {
+  display: grid;
+  gap: 16px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.settings-card {
+  padding: 20px;
+  border: 1px solid #e0e7f1;
+  border-radius: 13px;
+  background: #fff;
+}
+.settings-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.settings-card-title > span {
+  font-size: 10px;
+  background: #f5eee1;
+  color: #8f713d;
+  border-radius: 20px;
+  padding: 4px 9px;
+}
+.settings-card-title > .ready {
+  background: #eaf0ff;
+  color: #4265bc;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+.settings-field label {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 12px;
+  color: #425771;
+  margin-bottom: 7px;
+}
+.settings-field small {
+  color: #8291a6;
+  font-size: 10px;
+  font-weight: 400;
+}
+.settings-field input:not([type='checkbox']),
+.settings-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #dae3ef;
+  border-radius: 8px;
+  background: #f9fbfe;
+  color: #2f4560;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.settings-field input:focus-visible,
+.settings-field select:focus-visible {
+  outline: 2px solid #8faeef;
+  outline-offset: 2px;
+}
+.settings-field .settings-clear {
+  margin: 9px 0 0;
+  color: #8090a5;
+  font-size: 11px;
+}
+.settings-clear input {
+  margin: 0;
+  accent-color: #4168d4;
+}
+.settings-service {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 16px;
+  font-size: 11px;
+  color: #7d8ca1;
+}
+.settings-service b {
+  color: #425977;
+  margin-left: 5px;
+  font-weight: 500;
+}
+.settings-service p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.settings-save {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 22px;
+}
+.settings-save p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #61748d;
+  margin: 0 0 5px;
+}
+.settings-save small {
+  font-size: 10px;
+  color: #8090a4;
+}
+.settings-save button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 9px;
+  padding: 12px 18px;
+  color: #fff;
+  background: #4168d4;
+  font-size: 12px;
+}
+.settings-save button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.settings-error {
+  background: #fff0ed;
+  padding: 13px;
+  border-radius: 8px;
+  color: #b75645;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.settings-success {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #4168bc;
+  font-size: 12px;
+}
+.settings-page {
+  min-height: 100dvh;
+  background: #f5f7fb;
+  color: #26364b;
+  padding: 28px max(16px, calc((100vw - 880px) / 2));
+  color-scheme: light;
+}
+.settings-page > header {
+  padding: 0 26px;
+}
+.settings-page a {
+  color: #5d78b5;
+  text-decoration: none;
+  font-size: 12px;
+}
+.studio-header .studio-new-trip {
+  background: #dce8ff;
+  border-color: #dce8ff;
+  color: #294c83;
+  font-weight: 650;
+}
+@media (max-width: 760px) {
+  .studio-header .studio-new-trip span {
+    display: inline;
+  }
+  .studio-header-actions {
+    gap: 4px;
+  }
+  .studio-header .studio-new-trip {
+    padding: 0 7px;
+    gap: 4px;
+    font-size: 10px;
+  }
+  .app-dialog-heading {
+    padding: 16px 18px;
+  }
+  .settings-panel,
+  .new-trip-body {
+    padding: 18px;
+  }
+  .settings-card {
+    padding: 16px;
+  }
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .settings-save {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-save button {
+    width: 100%;
+  }
+}
+.cinema-shell .app-dialog .new-trip-body .import-box {
+  padding: 0;
+  background: transparent;
+}
+.cinema-shell .app-dialog .new-trip-body textarea {
+  background: #fff;
+  color: #23364c;
+  border: 1px solid #d7e1ed;
+}
+.cinema-shell .app-dialog .new-trip-body textarea::placeholder {
+  color: #91a0b4;
+}
+.cinema-shell .app-dialog .new-trip-body .primary-button {
+  background: #4168d4;
+  color: #fff;
+}
+.studio-header .studio-new-trip span {
+  color: inherit;
+}
+@media (max-width: 760px) {
+  .studio-header .studio-brand span {
+    display: none;
+  }
+}

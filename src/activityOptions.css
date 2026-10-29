@@ -1,0 +1,77 @@
+.activity-options { margin: 12px 0 22px; padding: 0; border: 1px solid #738cad28; border-radius: 12px; background: #8ba7d005; overflow: hidden; }
+.activity-options > summary { display: flex; align-items: center; gap: 7px; padding: 13px 11px; list-style: none; cursor: pointer; color: #c8d6ea; font-size: 11px; }
+.activity-options > summary::-webkit-details-marker { display: none; }
+.activity-summary-icon { display: grid; place-items: center; color: #a6bce1; }
+.activity-options > summary strong { font-weight: 550; }
+.activity-options > summary .activity-summary-count { margin-left: auto; font-size: 9px; color: #839ab9; font-weight: 400; }
+.activity-chevron { flex: none; color: #8195b1; transition: transform 180ms; }
+.activity-options[open] .activity-chevron { transform: rotate(180deg); }
+.activity-options-body { padding: 0 9px 10px; }
+.activity-options-hint { margin: 0 2px 11px; color: #8a9db8; font-size: 10px; line-height: 1.65; }
+.activity-tabs { display: flex; padding: 3px; gap: 3px; margin-bottom: 8px; border: 1px solid #718bad18; border-radius: 8px; background: #0c16268a; }
+.activity-tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 30px; padding: 3px; background: transparent; border: 0; border-radius: 5px; font-size: 10px; color: #8fa4c2; }
+.activity-tabs button[aria-pressed="true"] { background: #34465f; color: #d8e4f7; box-shadow: 0 1px 4px #0002; }
+.activity-tabs button span { font-size: 9px; opacity: .7; }
+.activity-tabs button:disabled { opacity: .4; }
+.activity-cards { display: grid; gap: 6px; }
+.activity-place-card { display: flex; align-items: flex-start; gap: 8px; padding: 11px 8px 9px; border: 1px solid #768eb51c; border-radius: 9px; background: #2532485c; }
+.activity-place-card.is-included { background: #567db012; border-color: #7fa8e45c; }
+.activity-place-icon { display: grid; place-items: center; flex: 0 0 25px; height: 27px; border-radius: 7px; background: #c3985e15; color: #d4a573; }
+.activity-place-icon.is-stay { background: #9a93db18; color: #b2a9e3; }
+.activity-place-content { flex: 1; min-width: 0; }
+.activity-place-content b { display: block; font-size: 11px; font-weight: 500; color: #cfddf0; line-height: 1.5; overflow-wrap: anywhere; }
+.activity-place-content > small { display: block; margin: 4px 0 8px; color: #849bb9; font-size: 9px; line-height: 1.6; }
+.activity-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-wrap: wrap; }
+.activity-card-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-height: 27px; padding: 3px 5px; border-radius: 5px; font-size: 9px; }
+.activity-locate { color: #93adcf; background: transparent; border: 0; }
+.activity-route-toggle { color: #b7d1f8; background: #6a9ce018; border: 1px solid #8bb4ea38; }
+.activity-route-toggle[aria-pressed="true"] { color: #d7e9ff; background: #759fd42b; border-color: #94b7ea66; }
+.activity-card-actions button:disabled { opacity: .45; cursor: default; }
+.activity-card-actions button:not(:disabled):hover { background: #84abe72e; color: #e2edff; }
+.activity-show-more { display: block; margin: 8px auto 0; border: 0; padding: 5px; border-radius: 5px; background: transparent; font-size: 10px; color: #9ab5da; }
+.activity-options button:focus-visible { outline: 2px solid #94bafa; outline-offset: 2px; }
+.journey-map-stop.is-map-only .journey-map-dot { border-radius: 8px; border-style: dashed; color: var(--stop-color); font-size: 11px; background: #14243af2; }
+.appearance-atlas .journey-map-stop.is-map-only .journey-map-dot { background: #fffdf8; color: var(--stop-color); }
+.journey-map-stop.is-map-only .journey-place-label { font-size: 10px; border-style: dashed; }
+.journey-poi-card:has(.journey-poi-route-toggle) { max-height: min(390px, 58vh); }
+.journey-poi-route-toggle { display: block; width: 100%; padding: 9px; margin-top: 11px; border: 1px solid #93b6ed55; border-radius: 7px; background: #638bc739; color: #e0edff; font-size: 11px; }
+.journey-poi-route-toggle:disabled { opacity: .5; }
+.journey-poi-day-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.journey-poi-day-picker button { padding: 6px 9px; border: 1px solid #8aabd32d; border-radius: 5px; font-size: 10px; color: #a3b9d7; background: transparent; }
+.journey-poi-day-picker button[aria-pressed="true"] { border-color: #98bbed8a; color: #dceaff; background: #628bc440; }
+.appearance-atlas .journey-poi-route-toggle { background: #e3edff; color: #355f9c; border-color: #bbceea; }
+.appearance-atlas .journey-poi-day-picker button { color: #657b97; border-color: #cfdae7; }
+.appearance-atlas .journey-poi-day-picker button[aria-pressed="true"] { background: #e3edff; color: #355f9c; border-color: #9bb7de; }
+.map-activity-key { display: inline-flex; align-items: center; gap: 4px; margin-right: 7px; color: inherit; font-size: 9px; font-style: normal; }
+.map-activity-key b { display: grid; place-items: center; width: 17px; height: 17px; border: 1px dashed #b68552; border-radius: 5px; font-size: 9px; color: #b68552; }
+.map-activity-key.stay b { color: #9386c8; border-color: #9386c8; }
+@media (max-width: 760px) { .activity-options > summary { padding: 14px; font-size: 12px; } .activity-options-body { padding: 0 12px 12px; } .activity-place-card { padding: 12px; } .activity-place-content b { font-size: 12px; } .activity-place-content > small { font-size: 10px; } .activity-card-actions button { min-height: 33px; font-size: 10px; padding: 4px 7px; } }
+@media (prefers-reduced-motion: reduce) { .activity-chevron { transition: none; } }
+/* Keep map actions below the title and map-style switch on a phone. */
+@media (max-width: 760px) and (min-height: 600px) {
+  .journey-atlas .amap-info:has(.journey-poi-route-toggle) {
+    top: 110px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+  }
+  .journey-poi-card:has(.journey-poi-route-toggle) { max-height: calc(100dvh - 385px); }
+}
+@media (min-width: 761px) and (max-height: 500px) {
+  .journey-atlas .amap-info:has(.journey-poi-card) {
+    top: 10px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+  }
+  .journey-poi-card, .journey-poi-card:has(.journey-poi-route-toggle) { max-height: calc(100dvh - 170px); }
+}
+.activity-review-bar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 11px; border: 1px solid #91b6ef55; border-radius: 10px; color: #dce9ff; background: #263c59f5; box-shadow: 0 5px 20px #08111e30; }
+.activity-review-bar strong { display: block; font-size: 11px; font-weight: 550; }
+.activity-review-bar small { display: block; margin-top: 4px; color: #a6bcd9; font-size: 9px; }
+.activity-review-bar.in-panel { position: sticky; top: 0; z-index: 5; margin: 12px 0; }
+.activity-review-bar.on-map { position: absolute; z-index: 8; bottom: 80px; left: 22px; right: 85px; max-width: 460px; backdrop-filter: blur(16px); }
+.activity-review-actions { display: flex; align-items: center; gap: 5px; }
+.activity-review-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 31px; padding: 6px 9px; border-radius: 6px; font-size: 10px; }
+.activity-review-cancel { border: 1px solid #91afda30; background: transparent; color: #b7cce9; }
+.activity-review-apply { border: 1px solid #a3c0f5; background: #d7e6ff; color: #24436b; font-weight: 550; }
+.activity-review-actions button:disabled { opacity: .6; }
+@media (max-width: 760px) { .activity-review-bar.on-map { left: 12px; right: 68px; bottom: 76px; padding: 10px; } .activity-review-bar.in-panel { top: 0; } .activity-review-actions button { min-height: 36px; } }

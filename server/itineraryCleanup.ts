@@ -1,4 +1,9 @@
-import type { ParsedDay, ParsedItinerary, ParsedStop, TripScope } from '../src/shared/itinerary';
+import type {
+  ParsedDay,
+  ParsedItinerary,
+  ParsedStop,
+  TripScope
+} from '../src/shared/itinerary';
 
 const KNOWN_CITIES = [
   '宁波',
@@ -29,9 +34,12 @@ const KNOWN_CITIES = [
 
 const NON_PLACE_LINE =
   /^(住宿推荐|出行时间|限制|优势|备注|说明|不含|包含|含Meland|今日|日期|时间|地点|标题|美食推荐|餐厅推荐|店铺推荐|商场推荐|title|date)(?:\b|[：:（(]|$)/i;
-const TRANSPORT_BACK = /^(?:地铁|打车|步行|公交|骑车)?\s*(?:回|返回)(?:酒店|宾馆|住处|鄞州酒店|.*酒店)(?:休息)?$/;
-const RETURN_CITY_ONLY = /^(?:发车|返程|回程|返回|回|出发回)[\u4e00-\u9fa5]{2,6}$/;
-const GENERIC_ACTIVITY = /^(?:酒店|宾馆|住处)(?:午餐|晚餐|早餐|午休|休息|入住|退房|存行李)?/;
+const TRANSPORT_BACK =
+  /^(?:地铁|打车|步行|公交|骑车)?\s*(?:回|返回)(?:酒店|宾馆|住处|鄞州酒店|.*酒店)(?:休息)?$/;
+const RETURN_CITY_ONLY =
+  /^(?:发车|返程|回程|返回|回|出发回)[\u4e00-\u9fa5]{2,6}$/;
+const GENERIC_ACTIVITY =
+  /^(?:酒店|宾馆|住处)(?:午餐|晚餐|早餐|午休|休息|入住|退房|存行李)?/;
 const PLACE_HINT =
   /(站|馆|园|寺|阁|庙|滩|街|城|广场|百货|商场|银泰|Meland|乐园|公园|博物馆|图书馆|展览馆|火车站|高铁站)$/i;
 const TRIP_CITY_SUFFIX = /(亲子|旅行|旅游|行程|攻略|三日游|两日游|一日游|游)$/;
@@ -40,27 +48,57 @@ const STRONG_CROSS_CITY_ROUTE =
 const CROSS_CITY_ROUTE =
   /(自驾|取车|开车|租车|环线|小环线|大环线|跨城|路书|国道|高速|县城|川西|新疆|西藏|青甘|甘南|滇西|滇藏|伊犁|独库|318)/;
 
-export function cleanParsedItinerary(parsed: ParsedItinerary, rawText = ''): ParsedItinerary {
+export function cleanParsedItinerary(
+  parsed: ParsedItinerary,
+  rawText = ''
+): ParsedItinerary {
   const rawTitle = cleanTitle(parsed.title, rawText);
   const inferredTripCity = inferTripCity(rawTitle, rawText, parsed);
-  const tripScope = resolveTripScope(parsed.tripScope, rawTitle, rawText, parsed, inferredTripCity);
-  const useTripCityFallback = tripScope.mode === 'single_city' && Boolean(tripScope.primaryCity);
-  const preserveExplicitStopCity = shouldPreserveExplicitStopCities(rawTitle, rawText, parsed, tripScope);
-  const tripCity = useTripCityFallback ? tripScope.primaryCity || inferredTripCity : '';
+  const tripScope = resolveTripScope(
+    parsed.tripScope,
+    rawTitle,
+    rawText,
+    parsed,
+    inferredTripCity
+  );
+  const useTripCityFallback =
+    tripScope.mode === 'single_city' && Boolean(tripScope.primaryCity);
+  const preserveExplicitStopCity = shouldPreserveExplicitStopCities(
+    rawTitle,
+    rawText,
+    parsed,
+    tripScope
+  );
+  const tripCity = useTripCityFallback
+    ? tripScope.primaryCity || inferredTripCity
+    : '';
   const dateRange = inferDateRange(parsed.dateRange, `${rawTitle}\n${rawText}`);
 
   const days = (parsed.days || [])
-    .map((day) => cleanDay(day, tripCity, useTripCityFallback, preserveExplicitStopCity))
-    .filter((day): day is ParsedDay => Boolean(day && (day.stops?.length || 0) > 0));
+    .map((day) =>
+      cleanDay(day, tripCity, useTripCityFallback, preserveExplicitStopCity)
+    )
+    .filter((day): day is ParsedDay =>
+      Boolean(day && (day.stops?.length || 0) > 0)
+    );
 
   const alternatives = (parsed.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
+    .map((stop, index) =>
+      cleanStop(
+        stop,
+        tripCity,
+        index + 1,
+        useTripCityFallback,
+        preserveExplicitStopCity
+      )
+    )
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   return {
     ...parsed,
     title: summarizeTripTitle(rawTitle, rawText, tripCity, days),
-    language: parsed.language || (/[\u4e00-\u9fa5]/.test(rawText) ? 'zh-CN' : 'auto'),
+    language:
+      parsed.language || (/[\u4e00-\u9fa5]/.test(rawText) ? 'zh-CN' : 'auto'),
     dateRange,
     tripScope,
     days,
@@ -76,17 +114,29 @@ export function cleanStop(
   preserveExplicitStopCity = true
 ): ParsedStop | null {
   const source = normalizeWhitespace(stop.name || '');
-  if (!source || NON_PLACE_LINE.test(source) || TRANSPORT_BACK.test(source) || GENERIC_ACTIVITY.test(source)) {
+  if (
+    !source ||
+    NON_PLACE_LINE.test(source) ||
+    TRANSPORT_BACK.test(source) ||
+    GENERIC_ACTIVITY.test(source)
+  ) {
     return null;
   }
 
   const time = stop.time || extractTime(source);
-  const withoutTime = source.replace(/^\s*\d{1,2}[:：]\d{2}(?:\s*[-–—]\s*\d{1,2}[:：]\d{2})?\s*/, '');
-  if (RETURN_CITY_ONLY.test(withoutTime) && !PLACE_HINT.test(withoutTime)) return null;
-  const parentheticalNotes = Array.from(withoutTime.matchAll(/[（(]([^）)]+)[）)]/g)).map((match) => match[1]);
+  const withoutTime = source.replace(
+    /^\s*\d{1,2}[:：]\d{2}(?:\s*[-–—]\s*\d{1,2}[:：]\d{2})?\s*/,
+    ''
+  );
+  if (RETURN_CITY_ONLY.test(withoutTime) && !PLACE_HINT.test(withoutTime))
+    return null;
+  const parentheticalNotes = Array.from(
+    withoutTime.matchAll(/[（(]([^）)]+)[）)]/g)
+  ).map((match) => match[1]);
   const withoutParen = withoutTime.replace(/[（(][^）)]+[）)]/g, '').trim();
   const extracted = extractDestination(withoutParen);
-  const rawName = extracted || withoutParen.split(/[，,；;]/)[0] || withoutParen;
+  const rawName =
+    extracted || withoutParen.split(/[，,；;]/)[0] || withoutParen;
   const name = polishPlaceName(rawName);
 
   if (!isUsefulPlaceName(name)) return null;
@@ -94,7 +144,9 @@ export function cleanStop(
   const notes = [
     stop.note,
     ...parentheticalNotes,
-    extracted ? withoutParen.replace(rawName, '').replace(/^[，,；;\s]+/, '') : ''
+    extracted
+      ? withoutParen.replace(rawName, '').replace(/^[，,；;\s]+/, '')
+      : ''
   ]
     .map((value) => normalizeWhitespace(value || ''))
     .filter(Boolean);
@@ -103,9 +155,19 @@ export function cleanStop(
     order: stop.order && stop.order > 0 ? stop.order : fallbackOrder,
     name,
     note: dedupeText(notes).join('；'),
-    city: normalizeStopCity(stop.city, tripCity, useTripCityFallback, preserveExplicitStopCity),
+    city: normalizeStopCity(
+      stop.city,
+      tripCity,
+      useTripCityFallback,
+      preserveExplicitStopCity
+    ),
+    province: normalizeWhitespace(stop.province || ''),
+    district: normalizeWhitespace(stop.district || ''),
+    locationHint: normalizeWhitespace(stop.locationHint || ''),
     time,
-    category: stop.category || ''
+    category: stop.category || '',
+    activity: stop.activity,
+    arrival: stop.arrival
   };
 }
 
@@ -115,15 +177,33 @@ function cleanDay(
   useTripCityFallback: boolean,
   preserveExplicitStopCity: boolean
 ): ParsedDay | null {
-  const rawTitle = normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) || `Day ${day.dayIndex || ''}`;
+  const rawTitle =
+    normalizeWhitespace(day.title || `Day ${day.dayIndex || ''}`) ||
+    `Day ${day.dayIndex || ''}`;
   const date = day.date || extractDate(rawTitle);
   const stops = (day.stops || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
+    .map((stop, index) =>
+      cleanStop(
+        stop,
+        tripCity,
+        index + 1,
+        useTripCityFallback,
+        preserveExplicitStopCity
+      )
+    )
     .filter((stop): stop is ParsedStop => Boolean(stop))
     .map((stop, index) => ({ ...stop, order: index + 1 }));
 
   const alternatives = (day.alternatives || [])
-    .map((stop, index) => cleanStop(stop, tripCity, index + 1, useTripCityFallback, preserveExplicitStopCity))
+    .map((stop, index) =>
+      cleanStop(
+        stop,
+        tripCity,
+        index + 1,
+        useTripCityFallback,
+        preserveExplicitStopCity
+      )
+    )
     .filter((stop): stop is ParsedStop => Boolean(stop));
 
   if (stops.length === 0 && alternatives.length === 0) return null;
@@ -142,12 +222,19 @@ function cleanTitle(title: string | undefined, rawText: string): string {
     .split(/\n+/)
     .map((line) => normalizeWhitespace(line))
     .find((line) => line && !NON_PLACE_LINE.test(line));
-  const candidate = normalizeWhitespace(title || firstLine || 'Untitled itinerary');
+  const candidate = normalizeWhitespace(
+    title || firstLine || 'Untitled itinerary'
+  );
   if (NON_PLACE_LINE.test(candidate)) return firstLine || 'Untitled itinerary';
   return candidate.slice(0, 60);
 }
 
-function summarizeTripTitle(title: string, rawText: string, tripCity: string, days: ParsedDay[]): string {
+function summarizeTripTitle(
+  title: string,
+  rawText: string,
+  tripCity: string,
+  days: ParsedDay[]
+): string {
   const candidate = stripDecorations(title);
   if (isConciseTripTitle(candidate)) return candidate;
 
@@ -155,14 +242,22 @@ function summarizeTripTitle(title: string, rawText: string, tripCity: string, da
   const dayCount = days.length || countExplicitDays(rawText);
   const theme = inferTripTheme(`${title}\n${rawText}`);
   const noun = /自驾/.test(theme) ? '路线' : '行程';
-  return normalizeWhitespace(`${city}${dayCount ? ` ${dayCount} 日` : ''}${theme}${noun}`);
+  return normalizeWhitespace(
+    `${city}${dayCount ? ` ${dayCount} 日` : ''}${theme}${noun}`
+  );
 }
 
-function summarizeDayTitle(rawTitle: string, dayIndex: number, stops: ParsedStop[]): string {
+function summarizeDayTitle(
+  rawTitle: string,
+  dayIndex: number,
+  stops: ParsedStop[]
+): string {
   const candidate = stripDayTitle(rawTitle, dayIndex);
   if (isConciseDayTitle(candidate)) return candidate;
 
-  const titleStops = stops.filter((stop) => !/(?:站|机场|酒店|宾馆|住处)$/.test(stop.name));
+  const titleStops = stops.filter(
+    (stop) => !/(?:站|机场|酒店|宾馆|住处)$/.test(stop.name)
+  );
   const usableStops = titleStops.length ? titleStops : stops;
   if (usableStops.length >= 2) {
     const first = shortenTitlePlace(usableStops[0].name);
@@ -175,23 +270,33 @@ function summarizeDayTitle(rawTitle: string, dayIndex: number, stops: ParsedStop
 
 function isConciseTripTitle(title: string): boolean {
   if (!title || title.length > 28) return false;
-  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|放行李|存行李|不跑|只玩/i.test(title);
+  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|放行李|存行李|不跑|只玩/i.test(
+    title
+  );
 }
 
 function isConciseDayTitle(title: string): boolean {
   if (!title || title.length < 2 || title.length > 24) return false;
-  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|酒店|放行李|存行李|不跑|只玩|上午|下午|晚上/i.test(title);
+  return !/(?:^|\s)(?:Day|D)\s*\d+|第\s*\d+\s*天|→|->|\d{1,2}[:：]\d{2}|高铁|地铁|酒店|放行李|存行李|不跑|只玩|上午|下午|晚上/i.test(
+    title
+  );
 }
 
 function stripDayTitle(title: string, dayIndex: number): string {
   const dayPattern = dayIndex
-    ? new RegExp(`^(?:第\\s*${dayIndex}\\s*天|Day\\s*${dayIndex}|D\\s*${dayIndex})\\s*`, 'i')
+    ? new RegExp(
+        `^(?:第\\s*${dayIndex}\\s*天|Day\\s*${dayIndex}|D\\s*${dayIndex})\\s*`,
+        'i'
+      )
     : /^(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)\s*/i;
   return stripDecorations(title)
     .replace(dayPattern, '')
     .replace(/^[｜|:：.)、\-\s]+/, '')
     .replace(/^\d{1,2}[./月-]\d{1,2}[日号]?\s*/, '')
-    .replace(/^[（(]?(?:周[一二三四五六日天]|星期[一二三四五六日天])?[·.\s]*[）)]?/, '')
+    .replace(
+      /^[（(]?(?:周[一二三四五六日天]|星期[一二三四五六日天])?[·.\s]*[）)]?/,
+      ''
+    )
     .replace(/^[（(]|[）)]$/g, '')
     .replace(/^[-–—·\s]+/, '')
     .trim();
@@ -206,7 +311,10 @@ function stripDecorations(value: string): string {
 }
 
 function shortenTitlePlace(name: string): string {
-  const normalized = name.replace(/[（(].*?[）)]/g, '').replace(/\s+/g, '').trim();
+  const normalized = name
+    .replace(/[（(].*?[）)]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
   return normalized.length > 10 ? `${normalized.slice(0, 10)}…` : normalized;
 }
 
@@ -220,7 +328,11 @@ function inferTripTheme(text: string): string {
 }
 
 function inferCityFromText(text: string): string {
-  return KNOWN_CITIES.find((city) => new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(text)) || '';
+  return (
+    KNOWN_CITIES.find((city) =>
+      new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(text)
+    ) || ''
+  );
 }
 
 function resolveTripScope(
@@ -233,8 +345,24 @@ function resolveTripScope(
   const normalized = normalizeTripScope(scope);
   const explicitStopCities = getExplicitStopCities(parsed);
   const text = `${title}\n${rawText}`;
-  const hasStrongCrossCitySignal = STRONG_CROSS_CITY_ROUTE.test(text) || explicitStopCities.size > 1;
+  const hasStrongCrossCitySignal =
+    STRONG_CROSS_CITY_ROUTE.test(text) || explicitStopCities.size > 1;
 
+  if (
+    normalized.mode === 'multi_city' &&
+    normalized.cities?.length === 1 &&
+    explicitStopCities.size <= 1 &&
+    /环岛|岛内/.test(text) &&
+    !/跨城|跨多个|多个县市/.test(
+      (normalized.reason || '').replace(/不跨城|无需跨城|没有跨城/g, '')
+    )
+  ) {
+    return {
+      ...normalized,
+      mode: 'single_city',
+      primaryCity: normalized.cities[0]
+    };
+  }
   if (normalized.mode === 'multi_city') {
     return {
       ...normalized,
@@ -243,10 +371,16 @@ function resolveTripScope(
     };
   }
 
-  if (normalized.mode === 'single_city' && normalized.primaryCity && !hasStrongCrossCitySignal) {
+  if (
+    normalized.mode === 'single_city' &&
+    normalized.primaryCity &&
+    explicitStopCities.size <= 1
+  ) {
     return {
       ...normalized,
-      cities: normalized.cities?.length ? normalized.cities : [normalized.primaryCity]
+      cities: normalized.cities?.length
+        ? normalized.cities
+        : [normalized.primaryCity]
     };
   }
 
@@ -264,9 +398,13 @@ function resolveTripScope(
     return {
       mode: 'multi_city',
       primaryCity: '',
-      cities: mergeCities(normalized.cities || [], explicitStopCities.size > 1 ? [...explicitStopCities] : []),
+      cities: mergeCities(
+        normalized.cities || [],
+        explicitStopCities.size > 1 ? [...explicitStopCities] : []
+      ),
       confidence: Math.max(normalized.confidence || 0, 0.55),
-      reason: normalized.reason || 'Detected cross-city or road-trip route wording.'
+      reason:
+        normalized.reason || 'Detected cross-city or road-trip route wording.'
     };
   }
 
@@ -274,12 +412,18 @@ function resolveTripScope(
 }
 
 function normalizeTripScope(scope?: TripScope): TripScope {
-  const mode = scope?.mode === 'single_city' || scope?.mode === 'multi_city' ? scope.mode : 'unknown';
+  const mode =
+    scope?.mode === 'single_city' || scope?.mode === 'multi_city'
+      ? scope.mode
+      : 'unknown';
   return {
     mode,
+    province: normalizeWhitespace(scope?.province || ''),
     primaryCity: normalizeWhitespace(scope?.primaryCity || ''),
     cities: mergeCities(scope?.cities || []),
-    confidence: Number.isFinite(scope?.confidence) ? Math.max(0, Math.min(1, Number(scope?.confidence))) : 0,
+    confidence: Number.isFinite(scope?.confidence)
+      ? Math.max(0, Math.min(1, Number(scope?.confidence)))
+      : 0,
     reason: normalizeWhitespace(scope?.reason || '')
   };
 }
@@ -290,19 +434,8 @@ function shouldPreserveExplicitStopCities(
   parsed: ParsedItinerary,
   scope: TripScope
 ): boolean {
-  const explicitStopCities = getExplicitStopCities(parsed);
-  if (explicitStopCities.size === 0) return true;
-  if (scope.mode === 'single_city') return true;
-  if (explicitStopCities.size > 1) return true;
-
-  const [onlyCity] = [...explicitStopCities];
-  const text = `${title}\n${rawText}`;
-  if (scope.mode === 'multi_city' && STRONG_CROSS_CITY_ROUTE.test(text)) return false;
-  if (scope.mode === 'multi_city' && (scope.cities || []).length > 1) {
-    return (scope.cities || []).some((city) => city === onlyCity);
-  }
-
-  return scope.mode !== 'multi_city';
+  // A global route classification must never erase explicit per-place administrative context.
+  return true;
 }
 
 function normalizeStopCity(
@@ -326,7 +459,14 @@ function getExplicitStopCities(parsed: ParsedItinerary): Set<string> {
 }
 
 function mergeCities(...groups: string[][]): string[] {
-  return Array.from(new Set(groups.flat().map((city) => normalizeWhitespace(city)).filter(Boolean)));
+  return Array.from(
+    new Set(
+      groups
+        .flat()
+        .map((city) => normalizeWhitespace(city))
+        .filter(Boolean)
+    )
+  );
 }
 
 function shouldUseSingleTripCity(
@@ -351,12 +491,22 @@ function shouldUseSingleTripCity(
 }
 
 function countExplicitDays(rawText: string): number {
-  const matches = rawText.match(/(?:^|\n)\s*(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)(?=\s|[：:|｜.)、-]|$)/gi);
-  return matches ? new Set(matches.map((match) => match.replace(/\D/g, ''))).size : 0;
+  const matches = rawText.match(
+    /(?:^|\n)\s*(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)(?=\s|[：:|｜.)、-]|$)/gi
+  );
+  return matches
+    ? new Set(matches.map((match) => match.replace(/\D/g, ''))).size
+    : 0;
 }
 
-function inferTripCity(title: string, rawText: string, parsed: ParsedItinerary): string {
-  const titleCity = KNOWN_CITIES.find((city) => new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(title));
+function inferTripCity(
+  title: string,
+  rawText: string,
+  parsed: ParsedItinerary
+): string {
+  const titleCity = KNOWN_CITIES.find((city) =>
+    new RegExp(`${city}(?:${TRIP_CITY_SUFFIX.source})?`).test(title)
+  );
   if (titleCity) return titleCity;
 
   const haystack = [
@@ -379,7 +529,9 @@ function inferTripCity(title: string, rawText: string, parsed: ParsedItinerary):
 
 function inferDateRange(dateRange: ParsedItinerary['dateRange'], text: string) {
   if (dateRange?.label || dateRange?.start || dateRange?.end) return dateRange;
-  const match = text.match(/(\d{1,2}[./-]\d{1,2})\s*[-~至—]\s*(\d{1,2}[./-]\d{1,2})/);
+  const match = text.match(
+    /(\d{1,2}[./-]\d{1,2})\s*[-~至—]\s*(\d{1,2}[./-]\d{1,2})/
+  );
   if (!match) return { start: '', end: '', label: '' };
   return {
     start: match[1],
@@ -398,24 +550,34 @@ function extractDestination(value: string): string {
     .find((name) => PLACE_HINT.test(name) || /Meland/i.test(name));
   if (segmentPlace) return segmentPlace;
 
-  const matches = Array.from(value.matchAll(/(?:到|至|去|前往|抵达|回)([^，,；;]+)/g))
+  const matches = Array.from(
+    value.matchAll(/(?:到|至|去|前往|抵达|回)([^，,；;]+)/g)
+  )
     .map((match) => match[1])
     .map(polishPlaceName)
     .filter((name) => name && !GENERIC_ACTIVITY.test(name));
 
-  const placeLike = matches.find((name) => PLACE_HINT.test(name) || /Meland/i.test(name));
+  const placeLike = matches.find(
+    (name) => PLACE_HINT.test(name) || /Meland/i.test(name)
+  );
   return placeLike || matches[0] || '';
 }
 
 function polishPlaceName(value: string): string {
   return normalizeWhitespace(value)
     .replace(/^[✅✔️☑️📍🍜🏨🚇☀️\-\s]+/gu, '')
-    .replace(/^(?:乘坐|搭乘|坐)?(?:地铁|公交|高铁|火车|打车|步行|骑行)?\d*号?线?\s*/, '')
+    .replace(
+      /^(?:乘坐|搭乘|坐)?(?:地铁|公交|高铁|火车|打车|步行|骑行)?\d*号?线?\s*/,
+      ''
+    )
     .replace(/^高铁\s*/, '')
     .replace(/^出发\s*/, '')
     .replace(/^回\s*/, '')
     .replace(/^(?:到|至|去|前往|抵达)\s*/, '')
-    .replace(/(?:午餐|晚餐|早餐|简餐|午休|休息|散步|消食|逛吃|夜景|小吃|存行李|候车|发车|入场|入园|参观|预约|放电|顺走|即达|简单).*$/i, '')
+    .replace(
+      /(?:午餐|晚餐|早餐|简餐|午休|休息|散步|消食|逛吃|夜景|小吃|存行李|候车|发车|入场|入园|参观|预约|放电|顺走|即达|简单).*$/i,
+      ''
+    )
     .replace(/[，,；;].*$/, '')
     .replace(/\s+/g, '')
     .trim();
@@ -423,14 +585,28 @@ function polishPlaceName(value: string): string {
 
 function isUsefulPlaceName(name: string): boolean {
   if (!name || name.length < 2 || name.length > 28) return false;
-  if (NON_PLACE_LINE.test(name) || TRANSPORT_BACK.test(name) || GENERIC_ACTIVITY.test(name)) return false;
-  if (/^(?:上午|下午|晚上|周一|周二|周三|周四|周五|周六|周日)$/.test(name)) return false;
-  if (/^(?:地铁|步行|打车|高铁|火车|公交|发车|出发)/.test(name) && !PLACE_HINT.test(name)) return false;
+  if (
+    NON_PLACE_LINE.test(name) ||
+    TRANSPORT_BACK.test(name) ||
+    GENERIC_ACTIVITY.test(name)
+  )
+    return false;
+  if (/^(?:上午|下午|晚上|周一|周二|周三|周四|周五|周六|周日)$/.test(name))
+    return false;
+  if (
+    /^(?:地铁|步行|打车|高铁|火车|公交|发车|出发)/.test(name) &&
+    !PLACE_HINT.test(name)
+  )
+    return false;
   return true;
 }
 
 function extractTime(value: string): string {
-  return value.match(/^\s*(\d{1,2}[:：]\d{2}(?:\s*[-–—]\s*\d{1,2}[:：]\d{2})?)/)?.[1] || '';
+  return (
+    value.match(
+      /^\s*(\d{1,2}[:：]\d{2}(?:\s*[-–—]\s*\d{1,2}[:：]\d{2})?)/
+    )?.[1] || ''
+  );
 }
 
 function extractDate(value: string): string {
@@ -438,7 +614,10 @@ function extractDate(value: string): string {
 }
 
 function normalizeWhitespace(value: string): string {
-  return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  return value
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function dedupeText(values: string[]): string[] {

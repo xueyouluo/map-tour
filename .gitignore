@@ -1,10 +1,12 @@
 node_modules/
 dist/
+outputs/
 .env
 .env.*
 !.env.example
 npm-debug.log*
 .DS_Store
-data/*.json
-data/*.sqlite
-data/*.sqlite-*
+data/
+*.sqlite
+*.sqlite-*
+assets/music/

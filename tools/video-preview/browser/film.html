@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  />
+  <link rel="icon" href="data:," /><title>Map Tour 本地视频预览</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #dde1da;
+      font-family: 'PingFang SC', sans-serif;
+    }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #film {
+      height: 100%;
+      width: auto;
+      max-width: 100%;
+      object-fit: contain;
+      box-shadow: 0 0 80px #183b3820;
+    }
+    #controls {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 15px;
+      border-radius: 30px;
+      background: #153d38e8;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 20px;
+      padding: 7px 13px;
+      cursor: pointer;
+    }
+    input {
+      width: 180px;
+    }
+  </style>
+  <canvas id="film" width="1080" height="1920"></canvas
+  ><audio id="music" src="music.wav" preload="metadata"></audio>
+  <div id="controls">
+    <button id="play">播放</button
+    ><input
+      id="scrub"
+      type="range"
+      min="0"
+      max="31.99"
+      step=".01"
+      value="0"
+    /><span id="clock">0:00 / 1:20</span>
+  </div>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/_runtime/three/build/three.module.js",
+        "three/addons/": "/_runtime/three/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">import('./film.js').catch(() => { window.sceneError = '场景加载失败'; });</script>
+</html>

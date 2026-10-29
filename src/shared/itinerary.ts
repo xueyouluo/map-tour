@@ -1,7 +1,19 @@
+import { getDayActivityOptions } from './optionalPlaces';
+import { normalizeArrival } from './transport';
+import type { ActivityMeta, ArrivalMeta, Recommendations } from './activities';
 export type Coordinate = [number, number];
 
 export type MatchStatus = 'pending' | 'matched' | 'unmatched';
-export type RouteMode = 'driving' | 'walking' | 'transit' | 'straight';
+export type RouteMode =
+  | 'driving'
+  | 'walking'
+  | 'transit'
+  | 'rail'
+  | 'ferry'
+  | 'bus'
+  | 'subway'
+  | 'flight'
+  | 'straight';
 export type RoutePreference = 'auto' | 'driving' | 'walking' | 'transit';
 export type RouteStatus = 'complete' | 'fallback' | 'failed';
 export type ShareStatus = 'draft' | 'shared';
@@ -15,6 +27,7 @@ export interface DateRange {
 export type TripScopeMode = 'single_city' | 'multi_city' | 'unknown';
 
 export interface TripScope {
+  province?: string;
   mode: TripScopeMode;
   primaryCity?: string;
   cities?: string[];
@@ -22,7 +35,20 @@ export interface TripScope {
   reason?: string;
 }
 
+export interface PoiSearchContext {
+  province?: string;
+  city?: string;
+  district?: string;
+  locationHint?: string;
+  adcode?: string;
+  center?: Coordinate;
+  query?: string;
+}
 export interface PoiCandidate {
+  province?: string;
+  city?: string;
+  district?: string;
+  adcode?: string;
   poiId?: string;
   name: string;
   address?: string;
@@ -31,6 +57,8 @@ export interface PoiCandidate {
 }
 
 export interface PoiMatch extends PoiCandidate {
+  matchVersion?: 2;
+  searchContext?: PoiSearchContext;
   status: MatchStatus;
   confidence?: number;
   amapUrl?: string;
@@ -47,8 +75,13 @@ export interface Stop {
   name: string;
   note?: string;
   city?: string;
+  province?: string;
+  district?: string;
+  locationHint?: string;
   time?: string;
   category?: string;
+  activity?: ActivityMeta;
+  arrival?: ArrivalMeta;
   isAlternative?: boolean;
   poiMatch?: PoiMatch;
 }
@@ -59,6 +92,7 @@ export interface ItineraryDay {
   title: string;
   stops: Stop[];
   alternatives: Stop[];
+  activityOptions?: Stop[];
 }
 
 export interface RouteSegment {
@@ -68,6 +102,8 @@ export interface RouteSegment {
   toStopId: string;
   isInterDay?: boolean;
   mode: RouteMode;
+  transport?: ArrivalMeta;
+  steps?: import('./activities').TransportStep[];
   status: RouteStatus;
   distanceMeters?: number;
   durationSeconds?: number;
@@ -75,6 +111,10 @@ export interface RouteSegment {
 }
 
 export interface Itinerary {
+  schemaVersion?: 2;
+  transportNeedsReview?: boolean;
+  transportReviewLegs?: { fromStopId: string; toStopId: string }[];
+  recommendations?: Recommendations;
   id: string;
   title: string;
   language: string;
@@ -102,6 +142,11 @@ export interface ItinerarySummary {
 }
 
 export interface ParsedStop {
+  province?: string;
+  district?: string;
+  locationHint?: string;
+  activity?: ActivityMeta;
+  arrival?: ArrivalMeta;
   order?: number;
   name: string;
   note?: string;
@@ -116,9 +161,11 @@ export interface ParsedDay {
   title?: string;
   stops?: ParsedStop[];
   alternatives?: ParsedStop[];
+  activityOptions?: ParsedStop[];
 }
 
 export interface ParsedItinerary {
+  recommendations?: Recommendations;
   title?: string;
   language?: string;
   dateRange?: DateRange;
@@ -155,31 +202,49 @@ export function slugPart(value: string): string {
   return cleaned || 'stop';
 }
 
-export function stopId(dayIndex: number, order: number, name: string, alternative = false): string {
+export function stopId(
+  dayIndex: number,
+  order: number,
+  name: string,
+  alternative = false
+): string {
   return `${alternative ? 'alt' : 'stop'}-${dayIndex}-${order}-${slugPart(name)}`;
 }
 
-export function normalizeParsedItinerary(parsed: ParsedItinerary, id = 'draft'): Itinerary {
+export function normalizeParsedItinerary(
+  parsed: ParsedItinerary,
+  id = 'draft'
+): Itinerary {
   const days = (parsed.days || [])
-    .filter((day) => (day.stops?.length || 0) > 0 || (day.alternatives?.length || 0) > 0)
+    .filter(
+      (day) =>
+        (day.stops?.length || 0) > 0 || (day.alternatives?.length || 0) > 0
+    )
     .map((day, index) => {
       const dayIndex = index + 1;
       const stops = (day.stops || [])
         .filter((stop) => stop.name?.trim())
         .map((stop, stopIndex) => {
-          const order = stop.order && stop.order > 0 ? stop.order : stopIndex + 1;
+          const order =
+            stop.order && stop.order > 0 ? stop.order : stopIndex + 1;
           return normalizeStop(stop, dayIndex, order, false);
         });
 
       const alternatives = (day.alternatives || [])
         .filter((stop) => stop.name?.trim())
-        .map((stop, altIndex) => normalizeStop(stop, dayIndex, altIndex + 1, true));
+        .map((stop, altIndex) =>
+          normalizeStop(stop, dayIndex, altIndex + 1, true)
+        );
 
       return {
         dayIndex,
         date: day.date || '',
         title: day.title || `Day ${dayIndex}`,
         stops,
+        activityOptions: (day.activityOptions || []).map((stop, i) => ({
+          ...normalizeStop(stop, dayIndex, i + 1, false),
+          id: `option-${dayIndex}-${i}-${slugPart(stop.name)}`
+        })),
         alternatives
       };
     });
@@ -190,6 +255,8 @@ export function normalizeParsedItinerary(parsed: ParsedItinerary, id = 'draft'):
 
   return {
     id,
+    schemaVersion: 2,
+    recommendations: parsed.recommendations,
     title: parsed.title?.trim() || 'Untitled itinerary',
     language: parsed.language?.trim() || 'auto',
     dateRange: parsed.dateRange || {},
@@ -202,33 +269,58 @@ export function normalizeParsedItinerary(parsed: ParsedItinerary, id = 'draft'):
 }
 
 function normalizeTripScope(scope?: TripScope): TripScope {
-  const mode = scope?.mode === 'single_city' || scope?.mode === 'multi_city' ? scope.mode : 'unknown';
+  const mode =
+    scope?.mode === 'single_city' || scope?.mode === 'multi_city'
+      ? scope.mode
+      : 'unknown';
   return {
     mode,
+    province: scope?.province?.trim() || '',
     primaryCity: scope?.primaryCity?.trim() || '',
-    cities: Array.from(new Set((scope?.cities || []).map((city) => city.trim()).filter(Boolean))),
-    confidence: Number.isFinite(scope?.confidence) ? Math.max(0, Math.min(1, Number(scope?.confidence))) : 0,
+    cities: Array.from(
+      new Set((scope?.cities || []).map((city) => city.trim()).filter(Boolean))
+    ),
+    confidence: Number.isFinite(scope?.confidence)
+      ? Math.max(0, Math.min(1, Number(scope?.confidence)))
+      : 0,
     reason: scope?.reason?.trim() || ''
   };
 }
 
-function normalizeStop(stop: ParsedStop, dayIndex: number, order: number, alternative: boolean): Stop {
+function normalizeStop(
+  stop: ParsedStop,
+  dayIndex: number,
+  order: number,
+  alternative: boolean
+): Stop {
   return {
     id: stopId(dayIndex, order, stop.name, alternative),
     dayIndex,
     order,
-    label: alternative ? (dayIndex ? `D${dayIndex}-R${order}` : `R${order}`) : createStopLabel(dayIndex, order),
+    label: alternative
+      ? dayIndex
+        ? `D${dayIndex}-R${order}`
+        : `R${order}`
+      : createStopLabel(dayIndex, order),
     name: stop.name.trim(),
     note: stop.note?.trim() || '',
     city: stop.city?.trim() || '',
+    province: stop.province?.trim() || '',
+    district: stop.district?.trim() || '',
+    locationHint: stop.locationHint?.trim() || '',
     time: stop.time?.trim() || '',
     category: stop.category?.trim() || '',
+    activity: stop.activity,
+    arrival: stop.arrival ? normalizeArrival(stop.arrival) : undefined,
     isAlternative: alternative,
     poiMatch: { status: 'pending', name: stop.name.trim() }
   };
 }
 
-export function getVisibleDays(itinerary: Itinerary, activeDay: number | 'all'): ItineraryDay[] {
+export function getVisibleDays(
+  itinerary: Itinerary,
+  activeDay: number | 'all'
+): ItineraryDay[] {
   return activeDay === 'all'
     ? itinerary.days
     : itinerary.days.filter((day) => day.dayIndex === activeDay);
@@ -239,47 +331,87 @@ export function getMainStops(itinerary: Itinerary): Stop[] {
 }
 
 export function hasPendingPoiMatches(itinerary: Itinerary): boolean {
-  return getAllStops(itinerary).some((stop) => stop.poiMatch?.status === 'pending');
+  return getAllStops(itinerary).some(
+    (stop) =>
+      !stop.poiMatch ||
+      stop.poiMatch.status === 'pending' ||
+      (stop.poiMatch?.status === 'matched' && stop.poiMatch.matchVersion !== 2)
+  );
 }
 
 export function getAllStops(itinerary: Itinerary): Stop[] {
   return [
-    ...itinerary.days.flatMap((day) => [...day.stops, ...day.alternatives]),
+    ...itinerary.days.flatMap((day) => [
+      ...day.stops,
+      ...day.alternatives,
+      ...getDayActivityOptions(day, itinerary.recommendations)
+    ]),
     ...itinerary.alternatives
   ];
 }
 
-export function removeStopFromItinerary(itinerary: Itinerary, stopId: string): Itinerary {
+export function removeStopFromItinerary(
+  itinerary: Itinerary,
+  stopId: string
+): Itinerary {
   const next: Itinerary = structuredClone(itinerary);
-  const affectedMainDay = itinerary.days.find((day) => day.stops.some((stop) => stop.id === stopId))?.dayIndex;
+  const affectedMainDay = itinerary.days.find((day) =>
+    day.stops.some((stop) => stop.id === stopId)
+  )?.dayIndex;
 
   for (const day of next.days) {
-    day.stops = relabelStops(day.stops.filter((stop) => stop.id !== stopId), day.dayIndex, false);
-    day.alternatives = relabelStops(day.alternatives.filter((stop) => stop.id !== stopId), day.dayIndex, true);
+    day.stops = relabelStops(
+      day.stops.filter((stop) => stop.id !== stopId),
+      day.dayIndex,
+      false
+    );
+    day.alternatives = relabelStops(
+      day.alternatives.filter((stop) => stop.id !== stopId),
+      day.dayIndex,
+      true
+    );
   }
 
-  next.alternatives = relabelStops(next.alternatives.filter((stop) => stop.id !== stopId), 0, true);
+  next.alternatives = relabelStops(
+    next.alternatives.filter((stop) => stop.id !== stopId),
+    0,
+    true
+  );
   next.routeSegments = affectedMainDay
-    ? next.routeSegments.filter((segment) => !routeSegmentTouchesDay(segment, affectedMainDay))
+    ? next.routeSegments.filter(
+        (segment) => !routeSegmentTouchesDay(segment, affectedMainDay)
+      )
     : next.routeSegments;
   next.updatedAt = new Date().toISOString();
   return next;
 }
 
-function routeSegmentTouchesDay(segment: RouteSegment, dayIndex: number): boolean {
-  if (segment.dayIndex === dayIndex || segment.toDayIndex === dayIndex) return true;
+function routeSegmentTouchesDay(
+  segment: RouteSegment,
+  dayIndex: number
+): boolean {
+  if (segment.dayIndex === dayIndex || segment.toDayIndex === dayIndex)
+    return true;
   if (!segment.isInterDay) return false;
   return segment.dayIndex === dayIndex - 1;
 }
 
-function relabelStops(stops: Stop[], dayIndex: number, alternative: boolean): Stop[] {
+function relabelStops(
+  stops: Stop[],
+  dayIndex: number,
+  alternative: boolean
+): Stop[] {
   return stops.map((stop, index) => {
     const order = index + 1;
     return {
       ...stop,
       dayIndex,
       order,
-      label: alternative ? (dayIndex ? `D${dayIndex}-R${order}` : `R${order}`) : createStopLabel(dayIndex, order),
+      label: alternative
+        ? dayIndex
+          ? `D${dayIndex}-R${order}`
+          : `R${order}`
+        : createStopLabel(dayIndex, order),
       id: stopId(dayIndex, order, stop.name, alternative)
     };
   });

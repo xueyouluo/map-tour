@@ -4,11 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "music:import": "node tools/music-library/import.mjs",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite --host 0.0.0.0",
     "dev:server": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
+    "video:list": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx tools/video-preview/cli.mjs --list",
+    "video:plan": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx tools/video-preview/cli.mjs --plan-only",
+    "video:preview": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx tools/video-preview/cli.mjs",
+    "video:serve": "NODE_OPTIONS=--no-warnings=ExperimentalWarning tsx tools/video-preview/cli.mjs --serve",
     "start": "NODE_OPTIONS=--no-warnings=ExperimentalWarning NODE_ENV=production tsx server/index.ts"
   },
   "engines": {
@@ -19,10 +24,15 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "lucide-react": "^0.468.0",
+    "mediabunny": "1.51.0",
     "multer": "^2.2.0",
     "openai": "^4.77.0",
+    "playwright-core": "1.64.1",
+    "pngjs": "7.0.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "three": "0.186.1",
+    "tsx": "4.22.4"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
@@ -32,7 +42,6 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "vitest": "^4.1.9"

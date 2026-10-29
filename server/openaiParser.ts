@@ -1,5 +1,10 @@
+import { completeDailyActivities } from '../src/shared/activities';
 import OpenAI from 'openai';
-import { normalizeParsedItinerary, type ParsedDay, type ParsedItinerary } from '../src/shared/itinerary';
+import {
+  normalizeParsedItinerary,
+  type ParsedDay,
+  type ParsedItinerary
+} from '../src/shared/itinerary';
 import { cleanParsedItinerary } from './itineraryCleanup';
 
 export interface ParseInput {
@@ -12,7 +17,7 @@ export interface ParseInput {
 
 export interface ParseResult {
   itinerary: ReturnType<typeof normalizeParsedItinerary>;
-  source: 'openai' | 'ark' | 'local-fallback';
+  source: 'openai' | 'local-fallback';
   warning?: string;
 }
 
@@ -22,10 +27,7 @@ export interface ParseProgressEvent {
   receivedChars?: number;
 }
 
-type AiProvider = 'openai' | 'ark';
-
 interface AiRuntime {
-  provider: AiProvider;
   apiKey?: string;
   model?: string;
   baseURL?: string;
@@ -39,7 +41,15 @@ interface ParseOptions {
 const parseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'language', 'dateRange', 'tripScope', 'days', 'alternatives'],
+  required: [
+    'title',
+    'language',
+    'dateRange',
+    'tripScope',
+    'days',
+    'alternatives',
+    'recommendations'
+  ],
   properties: {
     title: { type: 'string' },
     language: { type: 'string' },
@@ -58,7 +68,10 @@ const parseSchema = {
       additionalProperties: false,
       required: ['mode', 'primaryCity', 'cities', 'confidence', 'reason'],
       properties: {
-        mode: { type: 'string', enum: ['single_city', 'multi_city', 'unknown'] },
+        mode: {
+          type: 'string',
+          enum: ['single_city', 'multi_city', 'unknown']
+        },
         primaryCity: { type: 'string' },
         cities: {
           type: 'array',
@@ -73,7 +86,14 @@ const parseSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['dayIndex', 'date', 'title', 'stops', 'alternatives'],
+        required: [
+          'dayIndex',
+          'date',
+          'title',
+          'stops',
+          'alternatives',
+          'activityOptions'
+        ],
         properties: {
           dayIndex: { type: 'number' },
           date: { type: 'string' },
@@ -82,11 +102,21 @@ const parseSchema = {
             type: 'array',
             items: parsedStopSchema()
           },
+          activityOptions: { type: 'array', items: parsedStopSchema() },
           alternatives: {
             type: 'array',
             items: parsedStopSchema()
           }
         }
+      }
+    },
+    recommendations: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['lodging', 'dining'],
+      properties: {
+        lodging: { type: 'array', items: parsedStopSchema() },
+        dining: { type: 'array', items: parsedStopSchema() }
       }
     },
     alternatives: {
@@ -100,29 +130,157 @@ function parsedStopSchema() {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['order', 'name', 'note', 'city', 'time', 'category'],
+    required: [
+      'order',
+      'name',
+      'note',
+      'city',
+      'province',
+      'district',
+      'locationHint',
+      'time',
+      'category',
+      'activity',
+      'arrival'
+    ],
     properties: {
       order: { type: 'number' },
       name: { type: 'string' },
       note: { type: 'string' },
       city: { type: 'string' },
+      province: { type: 'string' },
+      district: { type: 'string' },
+      locationHint: { type: 'string' },
       time: { type: 'string' },
-      category: { type: 'string' }
+      category: { type: 'string' },
+      activity: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'kind',
+          'source',
+          'placeKind',
+          'meal',
+          'quote',
+          'searchName',
+          'alsoVisit'
+        ],
+        properties: {
+          kind: { type: 'string', enum: ['visit', 'meal', 'stay'] },
+          source: { type: 'string', enum: ['explicit', 'default'] },
+          placeKind: { type: 'string', enum: ['venue', 'area'] },
+          meal: {
+            type: 'string',
+            enum: ['breakfast', 'lunch', 'dinner', 'none']
+          },
+          quote: { type: 'string' },
+          searchName: { type: 'string' },
+          alsoVisit: { type: 'boolean' }
+        }
+      },
+      arrival: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'mode',
+          'label',
+          'quote',
+          'source',
+          'confidence',
+          'reason',
+          'fromName',
+          'durationMinutes',
+          'distanceKm',
+          'departureTime',
+          'arrivalTime',
+          'steps'
+        ],
+        properties: {
+          mode: {
+            type: 'string',
+            enum: [
+              'auto',
+              'walking',
+              'driving',
+              'transit',
+              'rail',
+              'ferry',
+              'bus',
+              'subway',
+              'flight'
+            ]
+          },
+          source: { type: 'string', enum: ['explicit', 'inferred', 'unknown'] },
+          confidence: { type: 'number' },
+          reason: { type: 'string' },
+          fromName: { type: 'string' },
+          durationMinutes: { type: 'number' },
+          distanceKm: { type: 'number' },
+          departureTime: { type: 'string' },
+          arrivalTime: { type: 'string' },
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: [
+                'mode',
+                'fromName',
+                'toName',
+                'line',
+                'durationMinutes',
+                'distanceKm',
+                'note'
+              ],
+              properties: {
+                mode: {
+                  type: 'string',
+                  enum: [
+                    'walking',
+                    'driving',
+                    'bus',
+                    'subway',
+                    'transit',
+                    'rail',
+                    'flight',
+                    'ferry'
+                  ]
+                },
+                fromName: { type: 'string' },
+                toName: { type: 'string' },
+                line: { type: 'string' },
+                durationMinutes: { type: 'number' },
+                distanceKm: { type: 'number' },
+                note: { type: 'string' }
+              }
+            }
+          },
+          label: { type: 'string' },
+          quote: { type: 'string' }
+        }
+      }
     }
   } as const;
 }
 
-export async function parseItinerary(input: ParseInput, options: ParseOptions = {}): Promise<ParseResult> {
-  const runtime = resolveAiRuntime(input);
+export async function parseItinerary(
+  input: ParseInput,
+  options: ParseOptions = {}
+): Promise<ParseResult> {
+  const runtime = resolveAiRuntime();
   const { apiKey, model, baseURL } = runtime;
 
   if (!apiKey || !model) {
     if (input.image) {
-      throw new Error('图片解析需要先配置视觉理解模型。');
+      throw new Error(
+        '截图识别需要先在服务设置中配置行程解析模型、API 地址和密钥。'
+      );
     }
 
     return {
-      itinerary: normalizeParsedItinerary(cleanParsedItinerary(localParse(input.text || ''), input.text || '')),
+      itinerary: normalizeParsedItinerary(
+        cleanParsedItinerary(localParse(input.text || ''), input.text || '')
+      ),
       source: 'local-fallback',
       warning: '未配置文本解析模型，已使用本地规则解析。'
     };
@@ -138,38 +296,45 @@ export async function parseItinerary(input: ParseInput, options: ParseOptions = 
 
     options.onProgress?.({
       type: 'status',
-      message: runtime.provider === 'ark' ? '视觉理解模型已连接，正在分析图片...' : '文本模型已连接，正在解析行程...'
+      message: input.image
+        ? '行程解析模型已连接，正在识别截图...'
+        : '行程解析模型已连接，正在解析文字...'
     });
-    const jsonText = await parseWithOpenAI(client, model, input, baseURL, options);
+    const jsonText = await parseWithOpenAI(
+      client,
+      model,
+      input,
+      baseURL,
+      options
+    );
     options.onProgress?.({
       type: 'progress',
       message: '模型返回完成，正在校验结构化结果...'
     });
     const parsed = parseModelJson(jsonText) as ParsedItinerary;
-    const cleaned = cleanParsedItinerary(parsed, input.text || '');
+    const cleaned = completeDailyActivities(
+      cleanParsedItinerary(parsed, input.text || '')
+    );
     assertUsableAiParse(cleaned, input.text || '');
     return {
       itinerary: normalizeParsedItinerary(cleaned),
-      source: runtime.provider
+      source: 'openai'
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${runtime.provider === 'ark' ? '视觉理解模型' : '文本解析模型'}解析失败：${message}`);
+    if (input.image && isUnsupportedImageError(error)) {
+      throw new Error(
+        '截图识别失败：当前行程解析模型不支持图片输入，请在服务设置中选择支持图文输入的模型。'
+      );
+    }
+    throw new Error(
+      `${input.image ? '截图识别' : '文字行程'}解析失败：${message}`
+    );
   }
 }
 
-function resolveAiRuntime(input: ParseInput): AiRuntime {
-  if (input.image) {
-    return {
-      provider: 'ark',
-      apiKey: process.env.ARK_API_KEY,
-      model: process.env.ARK_IMAGE_MODEL || process.env.ARK_MODEL || 'doubao-seed-2-1-pro-260628',
-      baseURL: process.env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3'
-    };
-  }
-
+export function resolveAiRuntime(): AiRuntime {
   return {
-    provider: 'openai',
     apiKey: process.env.OPENAI_API_KEY,
     model: process.env.OPENAI_MODEL,
     baseURL: process.env.OPENAI_BASE_URL || undefined
@@ -181,22 +346,30 @@ function hasOpenAiRuntime(): boolean {
 }
 
 export function hasConfiguredAiRuntime(): boolean {
-  return hasOpenAiRuntime() || Boolean(process.env.ARK_API_KEY);
+  return hasOpenAiRuntime();
 }
 
 function countExplicitDays(rawText: string): number {
-  const matches = rawText.match(/(?:^|\n)\s*(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)(?=\s|[：:|｜.)、-]|$)/gi);
-  return matches ? new Set(matches.map((match) => match.replace(/\D/g, ''))).size : 0;
+  const matches = rawText.match(
+    /(?:^|\n)\s*(?:第\s*\d+\s*天|Day\s*\d+|D\s*\d+)(?=\s|[：:|｜.)、-]|$)/gi
+  );
+  return matches
+    ? new Set(matches.map((match) => match.replace(/\D/g, ''))).size
+    : 0;
 }
 
 function assertUsableAiParse(parsed: ParsedItinerary, rawText: string): void {
-  const parsedDayCount = (parsed.days || []).filter((day) => (day.stops?.length || 0) > 0).length;
+  const parsedDayCount = (parsed.days || []).filter(
+    (day) => (day.stops?.length || 0) > 0
+  ).length;
   const explicitDayCount = countExplicitDays(rawText);
   if (parsedDayCount === 0) {
     throw new Error('AI parser returned no usable travel days.');
   }
   if (explicitDayCount > 0 && parsedDayCount < explicitDayCount) {
-    throw new Error(`AI parser returned ${parsedDayCount} travel days, expected at least ${explicitDayCount}.`);
+    throw new Error(
+      `AI parser returned ${parsedDayCount} travel days, expected at least ${explicitDayCount}.`
+    );
   }
 }
 
@@ -208,7 +381,13 @@ async function parseWithOpenAI(
   options: ParseOptions = {}
 ): Promise<string> {
   if (options.stream && shouldPreferChatCompletions(baseURL)) {
-    return parseWithChatCompletionsStream(client, model, input, baseURL, options.onProgress);
+    return parseWithChatCompletionsStream(
+      client,
+      model,
+      input,
+      baseURL,
+      options.onProgress
+    );
   }
 
   if (shouldPreferChatCompletions(baseURL)) {
@@ -236,12 +415,29 @@ async function parseWithChatCompletionsStream(
   onProgress?: (event: ParseProgressEvent) => void
 ): Promise<string> {
   try {
-    return await parseWithChatCompletionsStreamUsingFormat(client, model, input, baseURL, onProgress, { type: 'json_object' });
+    return await parseWithChatCompletionsStreamUsingFormat(
+      client,
+      model,
+      input,
+      baseURL,
+      onProgress,
+      { type: 'json_object' }
+    );
   } catch (error) {
-    if (!shouldRetryWithoutJsonSchema(error)) throw error;
+    if (
+      (input.image && isUnsupportedImageError(error)) ||
+      !shouldRetryWithoutJsonSchema(error)
+    )
+      throw error;
   }
 
-  return parseWithChatCompletionsStreamUsingFormat(client, model, input, baseURL, onProgress);
+  return parseWithChatCompletionsStreamUsingFormat(
+    client,
+    model,
+    input,
+    baseURL,
+    onProgress
+  );
 }
 
 async function parseWithChatCompletionsStreamUsingFormat(
@@ -252,7 +448,6 @@ async function parseWithChatCompletionsStreamUsingFormat(
   onProgress?: (event: ParseProgressEvent) => void,
   responseFormat?: unknown
 ): Promise<string> {
-  const providerOptions = getChatProviderOptions(baseURL);
   const stream = await client.chat.completions.create({
     model,
     messages: [
@@ -266,10 +461,9 @@ async function parseWithChatCompletionsStreamUsingFormat(
       }
     ],
     temperature: 0,
-    max_tokens: 8192,
+    max_tokens: 32768,
     stream: true,
-    ...(responseFormat ? { response_format: responseFormat as any } : {}),
-    ...providerOptions
+    ...(responseFormat ? { response_format: responseFormat as any } : {})
   } as any);
 
   let text = '';
@@ -278,6 +472,10 @@ async function parseWithChatCompletionsStreamUsingFormat(
   let lastProgressAt = 0;
 
   for await (const chunk of stream as any) {
+    if (chunk?.choices?.[0]?.finish_reason === 'length')
+      throw new Error(
+        '模型输出达到长度上限，请缩短行程或提高模型输出限制后重试，未保存不完整行程。'
+      );
     const delta = chunk?.choices?.[0]?.delta || {};
     const reasoningDelta = extractReasoningDelta(delta);
     if (reasoningDelta && !sawReasoning) {
@@ -285,7 +483,7 @@ async function parseWithChatCompletionsStreamUsingFormat(
       onProgress?.({
         type: 'progress',
         message: input.image
-          ? '模型正在进行低强度推理，识别图片中的日期、路线和地点关系...'
+          ? '模型正在识别截图中的日期、路线和地点关系...'
           : '模型正在分析文本行程结构，判断日期、地点和游玩顺序...'
       });
     }
@@ -323,7 +521,11 @@ function extractReasoningDelta(delta: Record<string, unknown>): string {
     delta.reasoning,
     delta.reasoningContent
   ];
-  return candidates.find((value): value is string => typeof value === 'string' && value.length > 0) || '';
+  return (
+    candidates.find(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    ) || ''
+  );
 }
 
 function extractContentDelta(delta: Record<string, unknown>): string {
@@ -333,13 +535,23 @@ function extractContentDelta(delta: Record<string, unknown>): string {
   return content
     .map((part) => {
       if (typeof part === 'string') return part;
-      if (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string') return part.text;
+      if (
+        part &&
+        typeof part === 'object' &&
+        'text' in part &&
+        typeof part.text === 'string'
+      )
+        return part.text;
       return '';
     })
     .join('');
 }
 
-async function parseWithResponses(client: OpenAI, model: string, input: ParseInput): Promise<string> {
+async function parseWithResponses(
+  client: OpenAI,
+  model: string,
+  input: ParseInput
+): Promise<string> {
   try {
     const response = await client.responses.create({
       model,
@@ -366,33 +578,68 @@ async function parseWithResponses(client: OpenAI, model: string, input: ParseInp
   }
 }
 
-async function parseWithChatCompletions(client: OpenAI, model: string, input: ParseInput, baseURL?: string): Promise<string> {
+async function parseWithChatCompletions(
+  client: OpenAI,
+  model: string,
+  input: ParseInput,
+  baseURL?: string
+): Promise<string> {
   if (shouldPreferChatCompletions(baseURL)) {
     try {
-      return await parseWithChatCompletionsUsingFormat(client, model, input, baseURL, { type: 'json_object' });
+      return await parseWithChatCompletionsUsingFormat(
+        client,
+        model,
+        input,
+        baseURL,
+        { type: 'json_object' }
+      );
     } catch (error) {
-      if (!shouldRetryWithoutJsonSchema(error)) throw error;
+      if (
+        (input.image && isUnsupportedImageError(error)) ||
+        !shouldRetryWithoutJsonSchema(error)
+      )
+        throw error;
       return parseWithChatCompletionsUsingFormat(client, model, input, baseURL);
     }
   }
 
   try {
-    return await parseWithChatCompletionsUsingFormat(client, model, input, baseURL, {
-      type: 'json_schema',
-      json_schema: {
-        name: 'itinerary_parse',
-        schema: parseSchema,
-        strict: true
+    return await parseWithChatCompletionsUsingFormat(
+      client,
+      model,
+      input,
+      baseURL,
+      {
+        type: 'json_schema',
+        json_schema: {
+          name: 'itinerary_parse',
+          schema: parseSchema,
+          strict: true
+        }
       }
-    });
+    );
   } catch (error) {
-    if (!shouldRetryWithoutJsonSchema(error)) throw error;
+    if (
+      (input.image && isUnsupportedImageError(error)) ||
+      !shouldRetryWithoutJsonSchema(error)
+    )
+      throw error;
   }
 
   try {
-    return await parseWithChatCompletionsUsingFormat(client, model, input, baseURL, { type: 'json_object' });
+    return await parseWithChatCompletionsUsingFormat(
+      client,
+      model,
+      input,
+      baseURL,
+      { type: 'json_object' }
+    );
   } catch (error) {
-    if (!shouldRetryWithoutJsonSchema(error)) throw error;
+    if (
+      (input.image && isUnsupportedImageError(error)) ||
+      !shouldRetryWithoutJsonSchema(error)
+    )
+      throw error;
   }
 
   return parseWithChatCompletionsUsingFormat(client, model, input, baseURL);
@@ -405,7 +652,6 @@ async function parseWithChatCompletionsUsingFormat(
   baseURL?: string,
   responseFormat?: unknown
 ): Promise<string> {
-  const providerOptions = getChatProviderOptions(baseURL);
   const response = await client.chat.completions.create({
     model,
     messages: [
@@ -419,34 +665,13 @@ async function parseWithChatCompletionsUsingFormat(
       }
     ],
     temperature: 0,
-    max_tokens: 8192,
-    ...(responseFormat ? { response_format: responseFormat as any } : {}),
-    ...providerOptions
+    max_tokens: 32768,
+    ...(responseFormat ? { response_format: responseFormat as any } : {})
   } as any);
 
   const text = response.choices[0]?.message?.content;
   if (!text) throw new Error('Chat Completions parser returned empty content.');
   return text;
-}
-
-function getChatProviderOptions(baseURL?: string): Record<string, unknown> {
-  if (isVolcesBaseURL(baseURL)) {
-    return {
-      thinking: { type: process.env.ARK_THINKING_TYPE || 'enabled' },
-      reasoning_effort: process.env.ARK_REASONING_EFFORT || 'low'
-    };
-  }
-  return {};
-}
-
-function isVolcesBaseURL(baseURL?: string): boolean {
-  if (!baseURL) return false;
-  try {
-    const host = new URL(baseURL).host;
-    return /(\.|^)volces\.com$/i.test(host);
-  } catch {
-    return false;
-  }
 }
 
 function shouldPreferChatCompletions(baseURL?: string): boolean {
@@ -460,21 +685,50 @@ function shouldPreferChatCompletions(baseURL?: string): boolean {
 }
 
 function shouldTryChatFallback(error: unknown): boolean {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? (error as { status?: number }).status : undefined;
+  const status =
+    typeof error === 'object' && error !== null && 'status' in error
+      ? (error as { status?: number }).status
+      : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  return status === 404 || /404|not found|unsupported|unknown endpoint/i.test(message);
+  return (
+    status === 404 ||
+    /404|not found|unsupported|unknown endpoint/i.test(message)
+  );
 }
 
 function shouldTryResponsesFallback(error: unknown): boolean {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? (error as { status?: number }).status : undefined;
+  const status =
+    typeof error === 'object' && error !== null && 'status' in error
+      ? (error as { status?: number }).status
+      : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  return status === 404 || status === 405 || /not found|unknown endpoint/i.test(message);
+  return (
+    status === 404 ||
+    status === 405 ||
+    /not found|unknown endpoint/i.test(message)
+  );
+}
+
+function isUnsupportedImageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /image|vision|multimodal|图片|图像/i.test(message) &&
+    /not.support|unsupported|not.accept|text.only|unrecognized|unknown.type/i.test(
+      message
+    )
+  );
 }
 
 function shouldRetryWithoutJsonSchema(error: unknown): boolean {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? (error as { status?: number }).status : undefined;
+  const status =
+    typeof error === 'object' && error !== null && 'status' in error
+      ? (error as { status?: number }).status
+      : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  return status === 400 || /response_format|json_schema|schema|unsupported|invalid/i.test(message);
+  return (
+    status === 400 ||
+    /response_format|json_schema|schema|unsupported|invalid/i.test(message)
+  );
 }
 
 function parseModelJson(text: string): unknown {
@@ -496,7 +750,6 @@ function parseModelJson(text: string): unknown {
   }
 }
 
-
 function buildParserInstructions(): string {
   return [
     '你是行程解析器。只输出一个 JSON object，不要 Markdown，不要解释。',
@@ -504,17 +757,22 @@ function buildParserInstructions(): string {
     '必须保留用户语言，不翻译地点名、标题或备注。',
     'title 必须是整趟旅行的短标题，例如“宁波 3 日亲子行程”“杭州三日懒人逛吃攻略”；不要复制第一天的长句、交通句或完整路线。',
     'day.title 必须是当天短主题或区域，例如“南部片区到老外滩”“西湖经典线”；不要把当天所有 stop、时间、交通方式都写进标题。',
-    '必须判断 tripScope：所有主要路线点都在同一城市时 mode=single_city；跨城市、自驾、环线、路书、多县市移动时 mode=multi_city；证据不足时 mode=unknown。',
+    '必须判断 tripScope：按实际行政目的地判断是否跨城，不能凭自驾、环岛、环线或分三天就判为multi_city。岛内南线北线仍可能single_city，车站/机场离开或推荐返程城市不能反向污染所有景点。证据不足时unknown。',
     'tripScope.primaryCity 只在 single_city 时填写主城市；multi_city 或 unknown 时填空字符串。tripScope.cities 填明确涉及的城市/州/县级目的地，按行程顺序去重。',
     '只提取真实路线 stop：景点、博物馆、公园、寺庙、街区、商场、夜市、车站、机场、明确作为路线点的酒店等。',
-    '不要把这些内容解析为每天路线 stop：天气提示、攻略说明、住宿区域推荐、市内交通说明、核心地铁站点、限制说明、备注、优势、泛泛的回酒店休息。',
-    '如果文本包含美食推荐、餐厅推荐、咖啡店、店铺、商场内具体店名等，它们不是每天路线 stop；请放入顶层 alternatives，作为地图推荐点。category 可用 restaurant/shop/cafe。',
+    '天气/预约/价格等是原文建议，放 note 并注明原文信息，不要补写或验证当前政策，不要作为地点。住宿区域推荐必须保留在 recommendations.lodging；只给片区时 placeKind=area，searchName 用明确区域锚点如龙翔桥，不得虚构酒店。',
+    'recommendations.lodging/dining 的每一项与 days.stops 使用相同的完整结构，placeKind 和 searchName 必须嵌套在 activity 内，不能放在推荐项顶层。',
+    '餐厅推荐按原文顺序放 recommendations.dining，其他餐厅可同时放 alternatives。明确的午饭/晚饭地点放当天 activityOptions 中，默认不加入 stops；只有满觉陇农家菜等区域时用满觉陇、placeKind=area，不得虚构餐馆。推荐清单只保留候选，绝不自动选第一家。所有 meal/stay 都是用户按需加入的 activityOptions，stops 默认只保留游览和正式交通节点。满觉陇赏桂兼午饭时 stops 保留满觉陇 visit，activityOptions 单独保留满觉陇 meal，不能因去掉吃饭就漏掉赏桂；夜市如以逛街游览为目的也保留 visit。',
+    '每个地点必须尽可能提取 province（省/自治区）、city（市/州）、district（区/县）、locationHint（景区/乡镇等上下文），与 name 分开保存。省市区来自原文或可信地理上下文，不能确定就留空，不要虚构。岛县不能丢失，例如福建省、福州市、平潭县、北港村；推荐和可选活动也保留相同上下文。城市不能因全局multi_city就清空。',
     '跨城、自驾、环线、路书类行程不要把出发地或返程地当成所有 stop.city；如果不能确定某个地点所属城市，city 留空；能确定时给每个 stop 写自己的城市/州/县级上下文。',
     '如果出现“Day1：A→B→C”或“D1 A -> B -> C”，必须拆成 day.stops: A, B, C。',
     '如果出现编号行“1. 14:00-16:00 周尧昆虫博物馆（8号线直达）”，stop.name 只写“周尧昆虫博物馆”，time 写“14:00-16:00”，括号和预约/交通信息放 note。',
-    '交通句只在有明确目的地时提取目的地，例如“地铁去老外滩”提取“老外滩”；“地铁回酒店休息”不要提取。',
+    'arrival 表示从上一个地点到当前地点的交通，原文有手摇船/摇橹船/水上巴士/轮渡必须 mode=ferry，label 保留船型/航线，quote 引用原文证据。如码头→乌龟潭→茅家埠，两个目的地的 arrival 都是 ferry；武林门码头→拱宸桥也是 ferry。不要靠距离把船程改成车程。其他明确步行/地铁/高铁分别 walking/transit/rail；包括跨天：第二天第一站的 arrival 起点必须是前一天最后一个主线 stops 地点，默认忽略未加入的餐宿。没有明确交通但能结合原文整体策略和地点关系合理推断的，尽量选择具体 mode，source=inferred，说明 reason 和 confidence；确实无法判断才 auto/unknown。驾车 driving、公交 bus、地铁 subway、铁路 rail、飞机 flight、船 ferry 必须区分；原文只说地铁+步行可推断以地铁为主，不能编造具体线路。',
+    'arrival.fromName 写实际上一主线地点名，source=explicit/inferred/unknown；confidence 0到1，reason 判断理由，quote 仅摘录原文（推断不能伪装引用）。保留有依据的 durationMinutes、distanceKm、departureTime、arrivalTime，不知道的数值为0，不得虚构。steps 保存按先后排序的接驳、公交/地铁线路名、上/下站、铁路车次或船型；只填写原文已给的信息，推断步骤必须在 note 明示。跨天的起点同样必须衔接上一天，绝不能把第一站 arrival 全部留空。',
+    'activity.kind=visit/meal/stay，source=explicit（原文明确）或 default（推荐选择），placeKind=venue/area，meal=breakfast/lunch/dinner/none，quote 是不超过60字的原文证据，searchName 是单个可检索地名。远观雷峰塔不属于登塔行程，不应添加到实际路线。二选一默认第一条方案为主路线，第二方案保留在当天 alternatives 并在 note 标注方案，不要串成同一天的必去行程。',
     '按原文 day 顺序输出。原文有 Day1/Day2/Day3 时，输出这些 travel days，不要把前言或推荐区变成额外 day。',
-    '输出 schema: { title: string, language: string, dateRange: {start:string,end:string,label:string}, tripScope:{mode:string,primaryCity:string,cities:string[],confidence:number,reason:string}, days: [{dayIndex:number,date:string,title:string,stops:[{order:number,name:string,note:string,city:string,time:string,category:string}],alternatives:[]}], alternatives: [] }。',
+    '输出 schema: { title: string, language: string, dateRange: {start:string,end:string,label:string}, tripScope:{mode:string,primaryCity:string,cities:string[],confidence:number,reason:string}, recommendations:{lodging:[],dining:[]}, days: [{dayIndex:number,date:string,title:string,activityOptions:[],stops:[{order:number,name:string,note:string,province:string,city:string,district:string,locationHint:string,time:string,category:string,activity:{kind:string,source:string,placeKind:string,meal:string,quote:string,searchName:string},arrival:{mode:string,label:string,quote:string}}],alternatives:[]}], alternatives: [] }。',
+    'JSON保持紧凑，note和reason每项尽量控制在40字内；交通未知字段省略，不必为每个推荐餐厅输出空arrival或重复大段说明。推荐列表只需name、city、note和activity。',
     '缺失字段用空字符串或空数组，不要用 null。'
   ].join('\n');
 }
@@ -528,7 +786,8 @@ function buildResponseInputContent(input: ParseInput) {
       type: 'input_text',
       text:
         `Parse this itinerary. It may be plain text, Markdown, a copied table, or notes.\n\n` +
-        (input.text?.trim() || '(No text was provided; parse the attached image.)')
+        (input.text?.trim() ||
+          '(No text was provided; parse the attached image.)')
     }
   ];
 
@@ -553,7 +812,8 @@ function buildChatInputContent(input: ParseInput) {
       type: 'text',
       text:
         `Parse this itinerary. It may be plain text, Markdown, a copied table, or notes.\n\n` +
-        (input.text?.trim() || '(No text was provided; parse the attached image.)')
+        (input.text?.trim() ||
+          '(No text was provided; parse the attached image.)')
     }
   ];
 
@@ -578,7 +838,13 @@ export function localParse(rawText: string): ParsedItinerary {
       title: 'Untitled itinerary',
       language: 'auto',
       dateRange: { start: '', end: '', label: '' },
-      tripScope: { mode: 'unknown', primaryCity: '', cities: [], confidence: 0, reason: '' },
+      tripScope: {
+        mode: 'unknown',
+        primaryCity: '',
+        cities: [],
+        confidence: 0,
+        reason: ''
+      },
       days: [],
       alternatives: []
     };
@@ -607,10 +873,17 @@ export function localParse(rawText: string): ParsedItinerary {
 
     const inlineDayRoute = parseInlineDayRoute(line);
     if (inlineDayRoute) {
-      if (currentDay && ((currentDay.stops?.length || 0) > 0 || (currentDay.alternatives?.length || 0) > 0)) {
+      if (
+        currentDay &&
+        ((currentDay.stops?.length || 0) > 0 ||
+          (currentDay.alternatives?.length || 0) > 0)
+      ) {
         days.push(currentDay);
       }
-      currentDay = createParsedDay(inlineDayRoute.dayIndex, inlineDayRoute.heading);
+      currentDay = createParsedDay(
+        inlineDayRoute.dayIndex,
+        inlineDayRoute.heading
+      );
       currentDay.stops = inlineDayRoute.stops;
       inRouteSection = true;
       continue;
@@ -618,7 +891,11 @@ export function localParse(rawText: string): ParsedItinerary {
 
     const dayNumber = parseDayHeading(line);
     if (dayNumber) {
-      if (currentDay && ((currentDay.stops?.length || 0) > 0 || (currentDay.alternatives?.length || 0) > 0)) {
+      if (
+        currentDay &&
+        ((currentDay.stops?.length || 0) > 0 ||
+          (currentDay.alternatives?.length || 0) > 0)
+      ) {
         days.push(currentDay);
       }
       currentDay = createParsedDay(dayNumber, line);
@@ -631,7 +908,11 @@ export function localParse(rawText: string): ParsedItinerary {
     if (stop) currentDay.stops?.push(stop);
   }
 
-  if (currentDay && ((currentDay.stops?.length || 0) > 0 || (currentDay.alternatives?.length || 0) > 0)) {
+  if (
+    currentDay &&
+    ((currentDay.stops?.length || 0) > 0 ||
+      (currentDay.alternatives?.length || 0) > 0)
+  ) {
     days.push(currentDay);
   }
 
@@ -639,20 +920,36 @@ export function localParse(rawText: string): ParsedItinerary {
     title,
     language: /[\u4e00-\u9fa5]/.test(text) ? 'zh-CN' : 'auto',
     dateRange: { start: '', end: '', label: '' },
-    tripScope: { mode: 'unknown', primaryCity: '', cities: [], confidence: 0, reason: '' },
+    tripScope: {
+      mode: 'unknown',
+      primaryCity: '',
+      cities: [],
+      confidence: 0,
+      reason: ''
+    },
     days,
     alternatives: []
   };
 }
 
 function isContextSectionHeading(line: string): boolean {
-  return /(?:住宿|酒店|美食|餐厅|交通|地铁|天气|提示|注意|推荐|攻略|说明|费用|门票)/.test(line) &&
+  return (
+    /(?:住宿|酒店|美食|餐厅|交通|地铁|天气|提示|注意|推荐|攻略|说明|费用|门票)/.test(
+      line
+    ) &&
     !/^(?:day|d)\s*\d+/i.test(line) &&
-    !/[→>]/.test(line);
+    !/[→>]/.test(line)
+  );
 }
 
-function parseInlineDayRoute(line: string): { dayIndex: number; heading: string; stops: NonNullable<ParsedDay['stops']> } | null {
-  const match = line.match(/^\s*(?:(?:day|d)\s*(\d{1,2})|第\s*(\d{1,2})\s*天)\s*[：:|｜-]?\s*(.+)$/i);
+function parseInlineDayRoute(line: string): {
+  dayIndex: number;
+  heading: string;
+  stops: NonNullable<ParsedDay['stops']>;
+} | null {
+  const match = line.match(
+    /^\s*(?:(?:day|d)\s*(\d{1,2})|第\s*(\d{1,2})\s*天)\s*[：:|｜-]?\s*(.+)$/i
+  );
   const dayIndex = Number(match?.[1] || match?.[2]);
   const rest = match?.[3]?.trim();
   if (!dayIndex || !rest || !/[→>]/.test(rest)) return null;
@@ -660,7 +957,9 @@ function parseInlineDayRoute(line: string): { dayIndex: number; heading: string;
   const stops = rest
     .split(/\s*(?:→|->|>)\s*/)
     .map((name, index) => parseLineAsStop(name, index + 1))
-    .filter((stop): stop is NonNullable<ReturnType<typeof parseLineAsStop>> => Boolean(stop));
+    .filter((stop): stop is NonNullable<ReturnType<typeof parseLineAsStop>> =>
+      Boolean(stop)
+    );
 
   if (stops.length === 0) return null;
   return {
@@ -675,7 +974,10 @@ function findTitle(lines: string[]): string {
     return lines[0].replace(/^#+\s*/, '').slice(0, 42);
   }
   const firstMeaningful = lines.find((line) => !parseDayHeading(line));
-  return (firstMeaningful || lines[0])?.replace(/^#+\s*/, '').slice(0, 42) || 'Untitled itinerary';
+  return (
+    (firstMeaningful || lines[0])?.replace(/^#+\s*/, '').slice(0, 42) ||
+    'Untitled itinerary'
+  );
 }
 
 function createParsedDay(dayIndex: number, heading?: string): ParsedDay {
@@ -710,7 +1012,10 @@ function parseLineAsStop(line: string, order: number) {
   if (!cleaned || parseDayHeading(cleaned)) return null;
   if (/^(title|date|day|日期|时间|地点|备注)\b/i.test(cleaned)) return null;
 
-  const cells = cleaned.split(/\t+/).map((cell) => cell.trim()).filter(Boolean);
+  const cells = cleaned
+    .split(/\t+/)
+    .map((cell) => cell.trim())
+    .filter(Boolean);
   const firstCell = cells[0]?.replace(/^#+\s*/, '') || '';
   const [namePart, ...noteParts] = firstCell.split(/\s[-—:：]\s/);
   const name = namePart.trim();

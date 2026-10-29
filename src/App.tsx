@@ -1,7 +1,79 @@
-import { ArrowLeft, BusFront, CalendarDays, Car, Check, ChevronDown, ChevronUp, Copy, ExternalLink, FileImage, Footprints, History as HistoryIcon, Loader2, MapPinned, Route as RouteIcon, Share2, SlidersHorizontal, Trash2, Upload, X, type LucideIcon } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type MutableRefObject } from 'react';
-import { enrichItineraryWithAmap, loadAMap } from './amap';
-import { getConfig, listItineraries, loadItinerary, parseItineraryStream, saveItinerary, type ParseStreamEvent, type RuntimeConfig } from './api';
+import {
+  AuthProvider,
+  AuthPage,
+  AccountPage,
+  AuthControls,
+  RequireAuth,
+  useAuth
+} from './Auth';
+import { AdminPage } from './AdminPage';
+import { canCreateItinerary } from './shared/auth';
+import { ActivityReviewBar } from './ActivityReviewBar';
+import {
+  applyActivityEdits,
+  stageActivityEdit,
+  type ActivityEdits
+} from './shared/activityEdits';
+import { getMapOnlyActivities } from './shared/optionalPlaces';
+import { placeRegionLabel } from './shared/placeContext';
+import { journeySignature } from './shared/journeySignature';
+import { ActivityOptions } from './ActivityOptions';
+import { transportNames } from './shared/transport';
+import { activityDescription, activitySymbol } from './shared/activities';
+import {
+  ArrowLeft,
+  BusFront,
+  CalendarDays,
+  Car,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Compass,
+  ExternalLink,
+  Film,
+  Footprints,
+  History as HistoryIcon,
+  Loader2,
+  MapPinned,
+  LocateFixed,
+  Minus,
+  Mountain,
+  Plus,
+  Satellite,
+  Route as RouteIcon,
+  Share2,
+  SlidersHorizontal,
+  Settings2,
+  Trash2,
+  X,
+  type LucideIcon
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createJourneyMap,
+  drawJourneyMap,
+  enrichItineraryWithAmap,
+  loadAMap,
+  openJourneyStop,
+  type JourneyMapAppearance,
+  type JourneyMapDrawing
+} from './amap';
+import { atlasDayColor } from './shared/mapPresentation';
+import { VideoExport } from './VideoExport';
+import { HomePage } from './HomePage';
+import { ImportPanel, type ImportExample } from './ImportPanel';
+import { AppDialog } from './AppDialog';
+import { SettingsPanel, SettingsPage } from './SettingsPanel';
+import {
+  getConfig,
+  inferTransport,
+  listItineraries,
+  loadItinerary,
+  parseItineraryStream,
+  saveItinerary,
+  type RuntimeConfig
+} from './api';
 import {
   colorForDay,
   getVisibleDays,
@@ -20,114 +92,130 @@ type ActiveDay = number | 'all';
 type AMapNamespace = any;
 type CopyStatus = 'idle' | 'copied' | 'failed';
 type MobileSheetMode = 'collapsed' | 'expanded';
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-
-function formatParseProgress(hasImage: boolean, elapsedMs: number): string {
-  const elapsedSeconds = Math.floor(elapsedMs / 1000);
-  const phases = hasImage
-    ? [
-        '正在上传图片并读取行程内容',
-        '视觉理解模型正在识别截图文字',
-        '正在按日期拆分路线和地点',
-        '正在整理为地图可用的结构',
-        '图片解析时间可能较长，仍在等待模型返回'
-      ]
-    : [
-        '正在读取文本行程',
-        '文本模型正在抽取日期、地点和顺序',
-        '正在整理备注、备选点和推荐店铺',
-        '正在生成地图可用的行程结构',
-        '解析仍在进行，请稍候'
-      ];
-  const phase = phases[Math.min(phases.length - 1, Math.floor(elapsedMs / 5000))];
-  const dots = '.'.repeat((Math.floor(elapsedMs / 1200) % 3) + 1);
-  return `${phase}${dots}${elapsedSeconds >= 6 ? `（${elapsedSeconds}s）` : ''}`;
-}
-
-function handleParseStreamEvent(
-  event: ParseStreamEvent,
-  setParseStatus: (message: string) => void,
-  lastEventRef: MutableRefObject<number>
-) {
-  if (event.type !== 'status' && event.type !== 'progress') return;
-  lastEventRef.current = Date.now();
-  setParseStatus(event.message);
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
 
 export function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
+  );
+}
+function AppRoutes() {
   const pathname = useMemo(() => window.location.pathname, []);
-  if (pathname === '/history') return <HistoryPage />;
+  if (pathname === '/login') return <AuthPage />;
+  if (pathname === '/admin/setup') return <AuthPage setup />;
+  if (pathname === '/account')
+    return (
+      <RequireAuth>
+        <AccountPage />
+      </RequireAuth>
+    );
+  if (pathname === '/admin')
+    return (
+      <RequireAuth admin>
+        <AdminPage />
+      </RequireAuth>
+    );
+  if (pathname === '/history')
+    return (
+      <RequireAuth>
+        <HistoryPage />
+      </RequireAuth>
+    );
+  if (pathname === '/settings') return <SettingsPage />;
   return <MainApp pathname={pathname} />;
 }
 
 function MainApp({ pathname }: { pathname: string }) {
-  const shareId = useMemo(() => pathname.match(/^\/s\/([^/]+)/)?.[1], [pathname]);
-  const readOnly = Boolean(shareId);
+  const { session, openAuth, refresh: refreshAccount } = useAuth();
+  const user = session.user;
+  const canManageSettings = user?.role === 'admin';
+  const shareId = useMemo(
+    () => pathname.match(/^\/s\/([^/]+)/)?.[1],
+    [pathname]
+  );
+  const [readOnly, setReadOnly] = useState(Boolean(shareId));
+  const [newTripOpen, setNewTripOpen] = useState(false);
+  const [homeExample, setHomeExample] = useState<ImportExample>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
-  const [routePreference, setRoutePreference] = useState<RoutePreference>('auto');
-  const [connectDays, setConnectDays] = useState(false);
-  const [mobileSheetMode, setMobileSheetMode] = useState<MobileSheetMode>('collapsed');
+  const [routePreference, setRoutePreference] =
+    useState<RoutePreference>('auto');
+  const [connectDays, setConnectDays] = useState(true);
+  const [mobileSheetMode, setMobileSheetMode] =
+    useState<MobileSheetMode>('collapsed');
   const [showRoutes, setShowRoutes] = useState(true);
   const [showMapLabels, setShowMapLabels] = useState(true);
   const [parseStatus, setParseStatus] = useState('');
   const [isParsing, setIsParsing] = useState(false);
-  const [parseHasImage, setParseHasImage] = useState(false);
-  const [parseStartedAt, setParseStartedAt] = useState<number | null>(null);
   const [shareUrl, setShareUrl] = useState('');
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
   const [isSharing, setIsSharing] = useState(false);
+  const [isPlanningRoute, setIsPlanningRoute] = useState(false);
   const [error, setError] = useState('');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
-  const lastParseEventAtRef = useRef(0);
+  const [studioView, setStudioView] = useState<'film' | 'map'>('film');
+  const [exportRequest, setExportRequest] = useState(0);
+  const [encodingVideo, setEncodingVideo] = useState(false);
+  const [activityEdits, setActivityEdits] = useState<ActivityEdits>({});
+  const [applyingActivities, setApplyingActivities] = useState(false);
+  const activityChangeCount = Object.keys(activityEdits).length;
+  const activityDraft = useMemo(
+    () => (itinerary ? applyActivityEdits(itinerary, activityEdits) : null),
+    [itinerary, activityEdits]
+  );
+  const mapDraft = useMemo(
+    () =>
+      activityDraft && itinerary
+        ? { ...activityDraft, routeSegments: itinerary.routeSegments }
+        : null,
+    [activityDraft, itinerary]
+  );
+  useEffect(() => {
+    if (!canManageSettings) setSettingsOpen(false);
+  }, [canManageSettings]);
+
+  useEffect(() => {
+    setActivityEdits({});
+  }, [itinerary?.id]);
 
   useEffect(() => {
     if (!shareId) return;
     setParseStatus('正在读取分享行程...');
     loadItinerary(shareId)
-      .then(({ itinerary: loaded }) => {
+      .then(({ itinerary: loaded, editable }) => {
         setItinerary(loaded);
+        setReadOnly(!editable);
         setParseStatus('');
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
         setParseStatus('');
       });
-  }, [shareId]);
-
-  useEffect(() => {
-    if (!isParsing || !parseStartedAt) return;
-
-    const updateProgress = () => {
-      if (Date.now() - lastParseEventAtRef.current < 2600) return;
-      setParseStatus(formatParseProgress(parseHasImage, Date.now() - parseStartedAt));
-    };
-
-    updateProgress();
-    const timer = window.setInterval(updateProgress, 1600);
-    return () => window.clearInterval(timer);
-  }, [isParsing, parseHasImage, parseStartedAt]);
+  }, [shareId, user?.id]);
 
   async function handleParse(text: string, image?: File | null) {
+    if (!user) {
+      openAuth();
+      return;
+    }
+    if (!canCreateItinerary(user)) {
+      setError('行程额度已用完，可以继续编辑和导出已有行程。');
+      return;
+    }
     const hasImage = Boolean(image);
     setError('');
     setShareUrl('');
     setShareDialogOpen(false);
     setCopyStatus('idle');
     setIsParsing(true);
-    setParseHasImage(hasImage);
-    setParseStartedAt(Date.now());
-    lastParseEventAtRef.current = Date.now();
-    setParseStatus(formatParseProgress(hasImage, 0));
+    setParseStatus(hasImage ? '正在读取行程截图' : '正在读取行程文字');
     try {
       const result = await parseItineraryStream(text, image, (event) => {
-        handleParseStreamEvent(event, setParseStatus, lastParseEventAtRef);
+        if (event.type === 'status' || event.type === 'progress')
+          setParseStatus(event.message);
       });
       let nextItinerary: Itinerary = {
         ...result.itinerary,
@@ -137,12 +225,24 @@ function MainApp({ pathname }: { pathname: string }) {
         const saved = await saveItinerary(nextItinerary);
         nextItinerary = saved.itinerary;
       } catch (saveError) {
-        setError(`草稿保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`);
+        setError(
+          `草稿保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`
+        );
       }
       setItinerary(nextItinerary);
+      setReadOnly(false);
+      void refreshAccount();
+      setNewTripOpen(false);
+      if (nextItinerary.id && nextItinerary.id !== 'draft') {
+        window.history.replaceState(
+          null,
+          '',
+          '/s/' + encodeURIComponent(nextItinerary.id)
+        );
+      }
       setActiveDay('all');
       setRoutePreference('auto');
-      setConnectDays(false);
+      setConnectDays(true);
       setMobileSheetMode('collapsed');
       setSelectedStopId(null);
       setParseStatus(result.warning || '');
@@ -151,11 +251,14 @@ function MainApp({ pathname }: { pathname: string }) {
       setParseStatus('');
     } finally {
       setIsParsing(false);
-      setParseStartedAt(null);
     }
   }
 
   async function handleShare() {
+    if (!user) {
+      openAuth();
+      return;
+    }
     if (!itinerary) return;
     setError('');
     setCopyStatus('idle');
@@ -165,7 +268,10 @@ function MainApp({ pathname }: { pathname: string }) {
         ...itinerary,
         shareStatus: 'shared'
       });
-      const absoluteUrl = new URL(result.shareUrl, window.location.origin).toString();
+      const absoluteUrl = new URL(
+        result.shareUrl,
+        window.location.origin
+      ).toString();
       setItinerary(result.itinerary);
       setShareUrl(absoluteUrl);
       setShareDialogOpen(true);
@@ -189,77 +295,352 @@ function MainApp({ pathname }: { pathname: string }) {
   function handleRoutePreferenceChange(nextPreference: RoutePreference) {
     setRoutePreference(nextPreference);
     setSelectedStopId(null);
-    setItinerary((current) => current
-      ? {
-          ...current,
-          routeSegments: [],
-          updatedAt: new Date().toISOString()
-        }
-      : current);
+    setItinerary((current) =>
+      current
+        ? {
+            ...current,
+            routeSegments: [],
+            updatedAt: new Date().toISOString()
+          }
+        : current
+    );
   }
 
   function handleConnectDaysChange(nextConnectDays: boolean) {
     setConnectDays(nextConnectDays);
     setSelectedStopId(null);
     setActiveDay('all');
-    setItinerary((current) => current
-      ? {
-          ...current,
-          routeSegments: [],
-          updatedAt: new Date().toISOString()
-        }
-      : current);
+    setItinerary((current) =>
+      current
+        ? {
+            ...current,
+            routeSegments: [],
+            updatedAt: new Date().toISOString()
+          }
+        : current
+    );
   }
 
-  const saveHistoryRecord = useCallback((next: Itinerary, shareStatus: ShareStatus) => {
-    if (readOnly || next.id === 'draft') return;
-    saveItinerary({
-      ...next,
-      shareStatus
-    }).catch((saveError) => {
-      setError(`历史保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`);
-    });
-  }, [readOnly]);
+  const saveHistoryRecord = useCallback(
+    (next: Itinerary, shareStatus: ShareStatus) => {
+      if (readOnly || next.id === 'draft') return;
+      saveItinerary({
+        ...next,
+        shareStatus
+      }).catch((saveError) => {
+        setError(
+          `历史保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`
+        );
+      });
+    },
+    [readOnly]
+  );
 
-  const handleItineraryChange = useCallback((next: Itinerary) => {
-    setItinerary(next);
-    saveHistoryRecord(next, next.shareStatus || 'draft');
-  }, [saveHistoryRecord]);
+  const handleItineraryChange = useCallback(
+    (next: Itinerary) => {
+      setItinerary(next);
+      saveHistoryRecord(next, next.shareStatus || 'draft');
+    },
+    [saveHistoryRecord]
+  );
 
   function handleStopDelete(stopId: string) {
     setSelectedStopId(null);
     if (!itinerary) return;
     const next = removeStopFromItinerary(itinerary, stopId);
+    next.routeSegments = [];
+    next.transportNeedsReview = true;
     setItinerary(next);
     saveHistoryRecord(next, next.shareStatus || 'draft');
   }
 
-  const visibleDays = itinerary ? getVisibleDays(itinerary, activeDay) : [];
+  const handleActivityToggle = useCallback(
+    (dayIndex: number, option: Stop, include: boolean) => {
+      if (!itinerary || isPlanningRoute || encodingVideo || applyingActivities)
+        return;
+      setActivityEdits((edits) =>
+        stageActivityEdit(itinerary, edits, { dayIndex, option, include })
+      );
+      setSelectedStopId(null);
+    },
+    [itinerary, isPlanningRoute, encodingVideo, applyingActivities]
+  );
+
+  async function handleApplyActivityChanges() {
+    if (!user) {
+      openAuth();
+      return;
+    }
+    if (readOnly && !canCreateItinerary(user)) {
+      setError('行程额度已用完，不能另存新行程；仍可编辑自己的已有行程。');
+      return;
+    }
+    if (
+      !activityDraft ||
+      !activityChangeCount ||
+      isPlanningRoute ||
+      applyingActivities ||
+      encodingVideo
+    )
+      return;
+    setApplyingActivities(true);
+    setError('');
+    setSelectedStopId(null);
+    setConnectDays(true);
+    try {
+      if (readOnly) {
+        const saved = await saveItinerary({
+          ...activityDraft,
+          id: 'draft',
+          shareStatus: 'draft'
+        });
+        setReadOnly(false);
+        void refreshAccount();
+        setItinerary(saved.itinerary);
+        window.history.replaceState(
+          null,
+          '',
+          '/s/' + encodeURIComponent(saved.itinerary.id)
+        );
+      } else handleItineraryChange(activityDraft);
+      setActivityEdits({});
+    } catch (issue) {
+      setError(issue instanceof Error ? issue.message : String(issue));
+    } finally {
+      setApplyingActivities(false);
+    }
+  }
+  function cancelActivityChanges() {
+    setActivityEdits({});
+    setSelectedStopId(null);
+  }
+  const activityReview = {
+    count: activityChangeCount,
+    busy: applyingActivities,
+    onApply: handleApplyActivityChanges,
+    onCancel: cancelActivityChanges
+  };
+  const visibleDays = activityDraft
+    ? getVisibleDays(activityDraft, activeDay)
+    : [];
+  const handleDayChange = useCallback((day: ActiveDay) => {
+    setSelectedStopId(null);
+    setActiveDay(day);
+  }, []);
   const hasItinerary = Boolean(itinerary);
-  const effectiveMobileSheetMode: MobileSheetMode = hasItinerary ? mobileSheetMode : 'expanded';
+  const effectiveMobileSheetMode: MobileSheetMode = hasItinerary
+    ? mobileSheetMode
+    : 'expanded';
+
+  if (!hasItinerary && !shareId) {
+    return (
+      <>
+        <HomePage
+          busy={isParsing}
+          canManageSettings={canManageSettings}
+          onSettings={() => setSettingsOpen(true)}
+          onExample={(text) =>
+            setHomeExample((previous) => ({
+              text,
+              revision: (previous?.revision || 0) + 1
+            }))
+          }
+        >
+          <ImportPanel
+            variant="home"
+            example={homeExample}
+            onParse={handleParse}
+            busy={isParsing}
+            progressMessage={isParsing ? parseStatus : ''}
+          />
+          {error && (
+            <p className="settings-error" role="alert">
+              {error}
+            </p>
+          )}
+        </HomePage>
+        {settingsOpen && canManageSettings && (
+          <AppDialog
+            title="服务设置"
+            wide
+            onClose={() => setSettingsOpen(false)}
+          >
+            <SettingsPanel />
+          </AppDialog>
+        )}
+      </>
+    );
+  }
 
   return (
-    <div className={`app-shell ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${effectiveMobileSheetMode}`}>
-      <aside className={`side-panel ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} ${effectiveMobileSheetMode}`} aria-label="行程">
+    <div
+      className={`app-shell cinema-shell studio-mode-${studioView} ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${effectiveMobileSheetMode}`}
+    >
+      <header className="studio-header">
+        <a className="studio-brand" href="/" aria-label="Map Tour 首页">
+          <Mountain size={24} />
+          <span>MAP TOUR</span>
+        </a>
+        <div className="studio-project">
+          <strong>{itinerary?.title || '把行程，变成一部旅行电影'}</strong>
+          <span>
+            {itinerary
+              ? `${itinerary.days.length} 天 · ${itinerary.days.reduce((n, day) => n + day.stops.length, 0)} 个地点`
+              : '从一个旅行计划开始'}
+          </span>
+        </div>
+        <div className="studio-header-actions">
+          <button
+            className="studio-header-link studio-new-trip"
+            disabled={encodingVideo || isParsing}
+            onClick={() => {
+              setError('');
+              setNewTripOpen(true);
+            }}
+          >
+            <Plus size={15} />
+            <span>新建行程</span>
+          </button>
+          <AuthControls />
+          {canManageSettings && (
+            <button
+              className="studio-header-link"
+              aria-label="服务设置"
+              title="服务设置"
+              disabled={encodingVideo}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 size={15} />
+              <span>设置</span>
+            </button>
+          )}
+          <a
+            href="/history"
+            className="studio-header-link"
+            aria-label="历史行程"
+          >
+            <HistoryIcon size={16} />
+            <span>历史</span>
+          </a>
+          {itinerary && (
+            <>
+              <button
+                className="studio-header-link"
+                onClick={() => {
+                  if (readOnly) {
+                    setShareUrl(location.href);
+                    setShareDialogOpen(true);
+                  } else void handleShare();
+                }}
+                disabled={isSharing}
+              >
+                <Share2 size={15} />
+                <span>分享</span>
+              </button>
+              <button
+                className="studio-export-button"
+                disabled={
+                  encodingVideo ||
+                  isPlanningRoute ||
+                  applyingActivities ||
+                  activityChangeCount > 0
+                }
+                onClick={() => {
+                  setStudioView('film');
+                  setExportRequest((n) => n + 1);
+                }}
+              >
+                <Film size={15} />
+                {encodingVideo ? '导出中' : '导出视频'}
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+      {itinerary && (
+        <nav className="studio-view-tabs" aria-label="工作区">
+          <button
+            className={studioView === 'film' ? 'active' : ''}
+            aria-pressed={studioView === 'film'}
+            disabled={encodingVideo}
+            onClick={() => setStudioView('film')}
+          >
+            <Film size={14} />
+            旅程电影
+          </button>
+          <button
+            className={studioView === 'map' ? 'active' : ''}
+            aria-pressed={studioView === 'map'}
+            disabled={encodingVideo}
+            onClick={() => setStudioView('map')}
+          >
+            <MapPinned size={14} />
+            行程地图
+          </button>
+          <span>每一天，都是一个章节</span>
+        </nav>
+      )}
+      <aside
+        className={`side-panel ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} ${effectiveMobileSheetMode}`}
+        aria-label="行程"
+      >
         {hasItinerary && (
           <button
             className="mobile-sheet-toggle"
             type="button"
-            aria-label={mobileSheetMode === 'expanded' ? '进入地图模式' : '展开行程详情'}
-            onClick={() => setMobileSheetMode((mode) => (mode === 'expanded' ? 'collapsed' : 'expanded'))}
+            aria-label={
+              mobileSheetMode === 'expanded' ? '进入地图模式' : '展开行程详情'
+            }
+            onClick={() =>
+              setMobileSheetMode((mode) =>
+                mode === 'expanded' ? 'collapsed' : 'expanded'
+              )
+            }
           >
-            {mobileSheetMode === 'expanded' ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+            {mobileSheetMode === 'expanded' ? (
+              <ChevronDown size={16} />
+            ) : (
+              <ChevronUp size={16} />
+            )}
             {mobileSheetMode === 'expanded' ? '进入地图模式' : '展开行程详情'}
           </button>
         )}
-        <PanelHeader readOnly={readOnly} />
-        {!readOnly && <ImportPanel onParse={handleParse} busy={isParsing} progressMessage={isParsing ? parseStatus : ''} />}
+        <PanelHeader readOnly={readOnly} hasItinerary={hasItinerary} />
+        {!readOnly &&
+          (hasItinerary ? (
+            <details className="import-another">
+              <summary>
+                <PlusIcon /> 导入另一段旅程
+              </summary>
+              <ImportPanel
+                onParse={handleParse}
+                busy={isParsing}
+                progressMessage={isParsing ? parseStatus : ''}
+              />
+            </details>
+          ) : (
+            <ImportPanel
+              onParse={handleParse}
+              busy={isParsing}
+              progressMessage={isParsing ? parseStatus : ''}
+            />
+          ))}
         {itinerary && (
           <ItineraryPanel
-            itinerary={itinerary}
+            itinerary={activityDraft || itinerary}
+            activityReview={activityReview}
             visibleDays={visibleDays}
+            onActivityLocate={(stopId) => {
+              setStudioView('map');
+              setSelectedStopId(stopId);
+              setMobileSheetMode('collapsed');
+            }}
+            onActivityToggle={handleActivityToggle}
+            activityBusy={
+              isPlanningRoute || encodingVideo || applyingActivities
+            }
             activeDay={activeDay}
-            onDayChange={setActiveDay}
+            onDayChange={handleDayChange}
             routePreference={routePreference}
             onRoutePreferenceChange={handleRoutePreferenceChange}
             connectDays={connectDays}
@@ -276,26 +657,136 @@ function MainApp({ pathname }: { pathname: string }) {
             readOnly={readOnly}
           />
         )}
-        {!itinerary && readOnly && <EmptyState title="没有找到行程" body="这个分享链接可能已失效，或本地存储文件中没有对应数据。" />}
+        {!itinerary && readOnly && (
+          <EmptyState
+            title="没有找到行程"
+            body="这个分享链接可能已失效，或本地存储文件中没有对应数据。"
+          />
+        )}
         <StatusBlock message={isParsing ? '' : parseStatus} error={error} />
       </aside>
 
-      <main className="map-stage">
-        <MapView
-          itinerary={itinerary}
-          activeDay={activeDay}
-          onDayChange={setActiveDay}
-          onItineraryChange={handleItineraryChange}
-          routePreference={routePreference}
-          connectDays={connectDays}
-          showRoutes={showRoutes}
-          showMapLabels={showMapLabels}
-          selectedStopId={selectedStopId}
-          onStopSelect={setSelectedStopId}
-          readOnly={readOnly}
-        />
+      <main className="studio-main">
+        <ActivityReviewBar {...activityReview} onMap />
+        {itinerary && (
+          <div
+            className="studio-video-view"
+            style={{ display: studioView === 'film' ? 'block' : 'none' }}
+          >
+            <VideoExport
+              key={
+                (user?.id || 'guest') +
+                itinerary.id +
+                journeySignature(itinerary)
+              }
+              itinerary={itinerary}
+              planningRoute={isPlanningRoute || applyingActivities}
+              pendingRouteEdits={activityChangeCount > 0}
+              embedded
+              visible={studioView === 'film' && !newTripOpen && !settingsOpen}
+              chapterDay={activeDay}
+              focusStopId={selectedStopId}
+              exportRequest={exportRequest}
+              onEncodingChange={setEncodingVideo}
+            />
+          </div>
+        )}
+        <div
+          className={`map-stage studio-map-view ${!itinerary ? 'is-empty' : ''}`}
+        >
+          <MapView
+            itinerary={itinerary}
+            displayItinerary={mapDraft}
+            activeDay={activeDay}
+            onDayChange={handleDayChange}
+            onItineraryChange={handleItineraryChange}
+            onPlanningChange={setIsPlanningRoute}
+            routePreference={routePreference}
+            connectDays={connectDays}
+            showRoutes={showRoutes}
+            showMapLabels={showMapLabels}
+            selectedStopId={selectedStopId}
+            onStopSelect={setSelectedStopId}
+            readOnly={readOnly}
+            onActivityToggle={handleActivityToggle}
+            activityBusy={
+              isPlanningRoute || encodingVideo || applyingActivities
+            }
+            pendingActivityChanges={activityChangeCount > 0}
+            visible={!itinerary || studioView === 'map'}
+          />
+        </div>
       </main>
+      {itinerary && (
+        <div className="studio-chapters" aria-label="旅程章节">
+          <button
+            className={`studio-chapter-all ${activeDay === 'all' ? 'active' : ''}`}
+            aria-pressed={activeDay === 'all'}
+            disabled={encodingVideo}
+            onClick={() => handleDayChange('all')}
+          >
+            <Film size={18} />
+            <span>
+              全程
+              <br />
+              <small>{itinerary.days.length} 个章节</small>
+            </span>
+          </button>
+          {itinerary.days.map((day) => (
+            <button
+              key={day.dayIndex}
+              className={`studio-chapter ${activeDay === day.dayIndex ? 'active' : ''}`}
+              aria-pressed={activeDay === day.dayIndex}
+              disabled={encodingVideo}
+              onClick={() => handleDayChange(day.dayIndex)}
+              style={
+                {
+                  '--chapter-color': colorForDay(day.dayIndex)
+                } as React.CSSProperties
+              }
+            >
+              <ChapterCover day={day} />
+              <span>
+                <small>CHAPTER {String(day.dayIndex).padStart(2, '0')}</small>
+                <strong>{day.stops[0]?.name || day.title}</strong>
+                <em>{day.stops.length} 个地点</em>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
+      {newTripOpen && (
+        <AppDialog
+          title="新建行程"
+          busy={isParsing}
+          onClose={() => {
+            setNewTripOpen(false);
+            setError('');
+          }}
+        >
+          <div className="new-trip-body">
+            <p>
+              粘贴每日路线，或上传一张行程截图。生成后进入新的行程，当前行程会保留在历史中。
+            </p>
+            <ImportPanel
+              onParse={handleParse}
+              busy={isParsing}
+              progressMessage={isParsing ? parseStatus : ''}
+            />
+            {error && (
+              <p className="settings-error" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
+        </AppDialog>
+      )}
+      {settingsOpen && canManageSettings && (
+        <AppDialog title="服务设置" wide onClose={() => setSettingsOpen(false)}>
+          <SettingsPanel />
+        </AppDialog>
+      )}
       {shareDialogOpen && shareUrl && (
         <ShareDialog
           shareUrl={shareUrl}
@@ -305,6 +796,37 @@ function MainApp({ pathname }: { pathname: string }) {
         />
       )}
     </div>
+  );
+}
+
+function ChapterCover({ day }: { day: ItineraryDay }) {
+  const points = day.stops.flatMap((stop) =>
+    stop.poiMatch?.location ? [stop.poiMatch.location] : []
+  );
+  const xs = points.map((p) => p[0]),
+    ys = points.map((p) => p[1]);
+  const minX = Math.min(...xs),
+    minY = Math.min(...ys);
+  const dx = Math.max(0.001, Math.max(...xs) - minX),
+    dy = Math.max(0.001, Math.max(...ys) - minY);
+  const path = points
+    .map(
+      (p) =>
+        `${12 + ((p[0] - minX) / dx) * 76},${55 - ((p[1] - minY) / dy) * 40}`
+    )
+    .join(' ');
+  return (
+    <span className="chapter-cover" aria-hidden="true">
+      <svg viewBox="0 0 100 70">
+        <path
+          className="chapter-contour"
+          d="M-10 55Q5-10 40 14T110 4M-10 68Q5 3 40 27T110 17M-10 81Q5 16 40 40T110 30"
+        />
+        {points.length > 1 && <polyline points={path} />}
+        <circle cx="12" cy="55" r="3" />
+      </svg>
+      <b>{String(day.dayIndex).padStart(2, '0')}</b>
+    </span>
   );
 }
 
@@ -320,7 +842,8 @@ function HistoryPage() {
         if (!disposed) setItems(result.items);
       })
       .catch((err) => {
-        if (!disposed) setError(err instanceof Error ? err.message : String(err));
+        if (!disposed)
+          setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (!disposed) setLoading(false);
@@ -333,11 +856,12 @@ function HistoryPage() {
   return (
     <div className="history-page">
       <header className="history-header">
+        <AuthControls />
         <div className="brand-row">
           <div className="brand-mark">
             <MapPinned size={18} />
           </div>
-          <span>RouteBrief</span>
+          <span>MAP TOUR</span>
         </div>
         <a className="header-link" href="/">
           <ArrowLeft size={15} />
@@ -361,14 +885,22 @@ function HistoryPage() {
             正在读取历史数据...
           </div>
         )}
-        {!loading && error && <div className="history-state error">{error}</div>}
+        {!loading && error && (
+          <div className="history-state error">{error}</div>
+        )}
         {!loading && !error && items.length === 0 && (
-          <div className="history-state">还没有历史行程。生成并分享一次行程后，这里会出现记录。</div>
+          <div className="history-state">
+            还没有历史行程。生成并分享一次行程后，这里会出现记录。
+          </div>
         )}
         {!loading && !error && items.length > 0 && (
           <div className="history-grid">
             {items.map((item) => (
-              <a className="history-card" key={item.id} href={`/s/${encodeURIComponent(item.id)}`}>
+              <a
+                className="history-card"
+                key={item.id}
+                href={`/s/${encodeURIComponent(item.id)}`}
+              >
                 <div className="history-card-main">
                   <span className={`history-status-badge ${item.shareStatus}`}>
                     {item.shareStatus === 'shared' ? '已分享' : '草稿'}
@@ -397,150 +929,40 @@ function HistoryPage() {
   );
 }
 
-function PanelHeader({ readOnly }: { readOnly: boolean }) {
+function PlusIcon() {
+  return <span aria-hidden="true">＋</span>;
+}
+function PanelHeader({
+  readOnly,
+  hasItinerary
+}: {
+  readOnly: boolean;
+  hasItinerary: boolean;
+}) {
   return (
     <div className="panel-header">
       <div className="brand-row">
         <div className="brand-mark">
           <MapPinned size={18} />
         </div>
-        <span>RouteBrief</span>
+        <span>MAP TOUR</span>
         <a className="header-link" href={readOnly ? '/' : '/history'}>
           {readOnly ? '新建' : '历史'}
         </a>
       </div>
-      <h1>{readOnly ? '分享行程地图' : '行程转地图'}</h1>
-      <p>{readOnly ? '按天查看路线、地点和备注。' : '粘贴文字、Markdown、表格，或上传行程截图。'}</p>
+      {!hasItinerary && (
+        <>
+          <h1>下一站，去哪里？</h1>
+          <p>把旅行计划放进来，让每一站在地图上相遇。</p>
+        </>
+      )}
     </div>
   );
 }
 
-function ImportPanel({
-  onParse,
-  busy,
-  progressMessage
-}: {
-  onParse: (text: string, image?: File | null) => void;
-  busy: boolean;
-  progressMessage: string;
-}) {
-  const [text, setText] = useState('');
-  const [image, setImage] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState('');
-  const [fileError, setFileError] = useState('');
-
-  useEffect(() => {
-    if (!image) {
-      setImagePreviewUrl('');
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(image);
-    setImagePreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [image]);
-
-  function handleImageFile(file?: File | null) {
-    setFileError('');
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setFileError('只支持上传图片文件。');
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setFileError(`图片不能超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB。`);
-      return;
-    }
-    setImage(file);
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const pastedImage = getClipboardImageFile(event.clipboardData);
-    if (pastedImage) {
-      handleImageFile(pastedImage);
-    }
-  }
-
-  function handleDrop(event: DragEvent<HTMLTextAreaElement>) {
-    event.preventDefault();
-    handleImageFile(Array.from(event.dataTransfer.files)[0] || null);
-  }
-
-  return (
-    <section className="import-box">
-      <label className="field-label" htmlFor="itinerary-input">行程内容</label>
-      <textarea
-        id="itinerary-input"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onPaste={handlePaste}
-        onDrop={handleDrop}
-        onDragOver={(event) => event.preventDefault()}
-        placeholder="粘贴文字、Markdown、CSV/TSV 表格，也可以直接粘贴截图..."
-      />
-      <div className="import-actions">
-        <label className="file-button">
-          <FileImage size={16} />
-          <span>{image ? image.name : '上传截图'}</span>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(event) => handleImageFile(event.target.files?.[0] || null)}
-          />
-        </label>
-      </div>
-      {fileError && <div className="import-error" role="alert">{fileError}</div>}
-      {image && imagePreviewUrl && (
-        <div className="image-preview">
-          <img src={imagePreviewUrl} alt="已选择的行程截图预览" />
-          <div className="image-preview-meta">
-            <strong>{image.name}</strong>
-            <span>{formatFileSize(image.size)}</span>
-          </div>
-          <button
-            type="button"
-            aria-label="移除图片"
-            onClick={() => {
-              setImage(null);
-              setFileError('');
-            }}
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
-      <button
-        className="primary-button"
-        type="button"
-        disabled={busy || Boolean(fileError) || (!text.trim() && !image)}
-        onClick={() => onParse(text, image)}
-      >
-        {busy ? <Loader2 className="spin" size={17} /> : <Upload size={17} />}
-        {busy ? '正在解析' : '生成地图'}
-      </button>
-      {progressMessage && (
-        <div className="parse-progress" role="status" aria-live="polite">
-          <Loader2 className="spin" size={15} />
-          <span>{progressMessage}</span>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function getClipboardImageFile(data: DataTransfer): File | null {
-  const directFile = Array.from(data.files).find((file) => file.type.startsWith('image/'));
-  if (directFile) return directFile;
-
-  const imageItem = Array.from(data.items).find((item) => item.kind === 'file' && item.type.startsWith('image/'));
-  const file = imageItem?.getAsFile();
-  if (!file) return null;
-  if (file.name) return file;
-  return new File([file], `pasted-itinerary-${Date.now()}.png`, { type: file.type || 'image/png' });
-}
-
 function ItineraryPanel({
   itinerary,
+  activityReview,
   visibleDays,
   activeDay,
   onDayChange,
@@ -557,9 +979,16 @@ function ItineraryPanel({
   selectedStopId,
   onStopSelect,
   onStopDelete,
-  readOnly
+  readOnly,
+  onActivityToggle,
+  onActivityLocate,
+  activityBusy
 }: {
   itinerary: Itinerary;
+  activityReview: React.ComponentProps<typeof ActivityReviewBar>;
+  onActivityLocate: (stopId: string) => void;
+  onActivityToggle: (dayIndex: number, option: Stop, include: boolean) => void;
+  activityBusy: boolean;
   visibleDays: ItineraryDay[];
   activeDay: ActiveDay;
   onDayChange: (day: ActiveDay) => void;
@@ -585,7 +1014,8 @@ function ItineraryPanel({
 
   useEffect(() => {
     if (!window.matchMedia('(max-width: 760px)').matches) return;
-    const target = activeDay === 'all' ? summaryRef.current : dayRefs.current.get(activeDay);
+    const target =
+      activeDay === 'all' ? summaryRef.current : dayRefs.current.get(activeDay);
     if (!target) return;
 
     const timer = window.setTimeout(() => {
@@ -597,40 +1027,82 @@ function ItineraryPanel({
   return (
     <section className="itinerary-content">
       <div className="trip-summary" ref={summaryRef}>
+        <span className="trip-eyebrow">TRAVEL JOURNAL · 行程手记</span>
         <h2>{itinerary.title}</h2>
+        <div className="trip-facts">
+          <span>
+            <CalendarDays size={14} />
+            <b>{itinerary.days.length}</b> 天旅程
+          </span>
+          <span>
+            <MapPinned size={14} />
+            <b>
+              {itinerary.days.reduce((n, day) => n + day.stops.length, 0)}
+            </b>{' '}
+            个地点
+          </span>
+        </div>
         <div className="date-line">
           <CalendarDays size={16} />
-          <span>{itinerary.dateRange.label || [itinerary.dateRange.start, itinerary.dateRange.end].filter(Boolean).join(' - ') || '日期未识别'}</span>
+          <span>
+            {itinerary.dateRange.label ||
+              [itinerary.dateRange.start, itinerary.dateRange.end]
+                .filter(Boolean)
+                .join(' - ') ||
+              '日期未识别'}
+          </span>
         </div>
         <TripScopeLine scope={itinerary.tripScope} />
       </div>
 
-      <DaySelector itinerary={itinerary} activeDay={activeDay} onDayChange={onDayChange} />
-      <MapDisplayControls
-        routePreference={routePreference}
-        onRoutePreferenceChange={onRoutePreferenceChange}
-        connectDays={connectDays}
-        onConnectDaysChange={onConnectDaysChange}
-        showRoutes={showRoutes}
-        onShowRoutesChange={onShowRoutesChange}
-        showMapLabels={showMapLabels}
-        onShowMapLabelsChange={onShowMapLabelsChange}
-        allowRouteChange={!readOnly}
+      <DaySelector
+        itinerary={itinerary}
+        activeDay={activeDay}
+        onDayChange={onDayChange}
       />
+      <details className="map-settings-disclosure">
+        <summary>
+          <SlidersHorizontal size={14} />
+          地图与路线设置
+          <ChevronDown size={14} />
+        </summary>
+        <MapDisplayControls
+          routePreference={routePreference}
+          onRoutePreferenceChange={onRoutePreferenceChange}
+          connectDays={connectDays}
+          onConnectDaysChange={onConnectDaysChange}
+          showRoutes={showRoutes}
+          onShowRoutesChange={onShowRoutesChange}
+          showMapLabels={showMapLabels}
+          onShowMapLabelsChange={onShowMapLabelsChange}
+          allowRouteChange={!readOnly}
+        />
+      </details>
 
+      <ActivityReviewBar {...activityReview} />
       <div className="day-list">
         {visibleDays.map((day) => (
-          <DaySection
-            key={day.dayIndex}
-            sectionRef={(node) => {
-              if (node) dayRefs.current.set(day.dayIndex, node);
-              else dayRefs.current.delete(day.dayIndex);
-            }}
-            day={day}
-            selectedStopId={selectedStopId}
-            onStopSelect={onStopSelect}
-            onStopDelete={!readOnly ? onStopDelete : undefined}
-          />
+          <div key={day.dayIndex}>
+            <DaySection
+              key={day.dayIndex}
+              sectionRef={(node) => {
+                if (node) dayRefs.current.set(day.dayIndex, node);
+                else dayRefs.current.delete(day.dayIndex);
+              }}
+              day={day}
+              selectedStopId={selectedStopId}
+              onStopSelect={onStopSelect}
+              onStopDelete={!readOnly ? onStopDelete : undefined}
+            />
+            <ActivityOptions
+              day={day}
+              dining={itinerary.recommendations?.dining || []}
+              lodging={itinerary.recommendations?.lodging || []}
+              busy={activityBusy}
+              onLocate={onActivityLocate}
+              onToggle={onActivityToggle}
+            />
+          </div>
         ))}
         {activeDay === 'all' && itinerary.alternatives.length > 0 && (
           <AlternativeSection
@@ -645,9 +1117,22 @@ function ItineraryPanel({
 
       {!readOnly && (
         <div className="share-area">
-          <button className="share-button" type="button" onClick={onShare} disabled={pendingPoi || isSharing}>
-            {isSharing ? <Loader2 className="spin" size={17} /> : <Share2 size={17} />}
-            {isSharing ? '正在生成链接' : pendingPoi ? '等待地点匹配' : '分享行程'}
+          <button
+            className="share-button"
+            type="button"
+            onClick={onShare}
+            disabled={pendingPoi || isSharing}
+          >
+            {isSharing ? (
+              <Loader2 className="spin" size={17} />
+            ) : (
+              <Share2 size={17} />
+            )}
+            {isSharing
+              ? '正在生成链接'
+              : pendingPoi
+                ? '等待地点匹配'
+                : '分享行程'}
           </button>
         </div>
       )}
@@ -665,14 +1150,20 @@ function formatTripScope(scope?: TripScope): string {
   if (!scope || scope.mode === 'unknown') return '';
   const cities = (scope.cities || []).filter(Boolean);
   const cityText = cities.length
-    ? cities.slice(0, 4).join(' / ') + (cities.length > 4 ? ` 等 ${cities.length} 地` : '')
+    ? cities.slice(0, 4).join(' / ') +
+      (cities.length > 4 ? ` 等 ${cities.length} 地` : '')
     : scope.primaryCity || '';
-  if (scope.mode === 'single_city') return cityText ? `单城市 · ${cityText}` : '单城市';
+  if (scope.mode === 'single_city')
+    return cityText ? `单城市 · ${cityText}` : '单城市';
   return cityText ? `多城市 · ${cityText}` : '多城市路线';
 }
 
 function formatHistoryDateRange(item: ItinerarySummary): string {
-  return item.dateRange.label || [item.dateRange.start, item.dateRange.end].filter(Boolean).join(' - ') || '日期未识别';
+  return (
+    item.dateRange.label ||
+    [item.dateRange.start, item.dateRange.end].filter(Boolean).join(' - ') ||
+    '日期未识别'
+  );
 }
 
 function formatHistoryTime(value: string): string {
@@ -698,7 +1189,11 @@ function ShareDialog({
   onClose: () => void;
 }) {
   return (
-    <div className="share-dialog-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className="share-dialog-backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
       <section
         className="share-dialog"
         role="dialog"
@@ -706,7 +1201,12 @@ function ShareDialog({
         aria-labelledby="share-dialog-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <button className="icon-button share-dialog-close" type="button" aria-label="关闭分享弹窗" onClick={onClose}>
+        <button
+          className="icon-button share-dialog-close"
+          type="button"
+          aria-label="关闭分享弹窗"
+          onClick={onClose}
+        >
           <X size={18} />
         </button>
         <div className="share-dialog-icon">
@@ -715,19 +1215,30 @@ function ShareDialog({
         <h2 id="share-dialog-title">分享行程</h2>
         <p>朋友打开这个链接即可查看路线、地点和备注。</p>
         <div className="share-link-box">
-          <input value={shareUrl} readOnly aria-label="分享链接" onFocus={(event) => event.currentTarget.select()} />
+          <input
+            value={shareUrl}
+            readOnly
+            aria-label="分享链接"
+            onFocus={(event) => event.currentTarget.select()}
+          />
           <button className="copy-button" type="button" onClick={onCopy}>
             {copyStatus === 'copied' ? <Check size={16} /> : <Copy size={16} />}
             {copyStatus === 'copied' ? '已复制' : '复制链接'}
           </button>
         </div>
-        {copyStatus === 'failed' && <small className="copy-hint">浏览器未允许自动复制，可以选中链接后手动复制。</small>}
+        {copyStatus === 'failed' && (
+          <small className="copy-hint">
+            浏览器未允许自动复制，可以选中链接后手动复制。
+          </small>
+        )}
         <div className="share-dialog-actions">
           <a href={shareUrl} target="_blank" rel="noreferrer">
             <ExternalLink size={16} />
             打开分享页
           </a>
-          <button type="button" onClick={onClose}>关闭</button>
+          <button type="button" onClick={onClose}>
+            关闭
+          </button>
         </div>
       </section>
     </div>
@@ -833,12 +1344,24 @@ function DaySection({
 }) {
   const color = colorForDay(day.dayIndex);
   return (
-    <div ref={sectionRef} className="day-section" style={{ '--day-color': color } as React.CSSProperties}>
+    <div
+      ref={sectionRef}
+      className="day-section"
+      style={{ '--day-color': color } as React.CSSProperties}
+    >
       <div className="day-heading">
         <span>D{day.dayIndex}</span>
         <div>
-          <h3>{day.title}</h3>
-          <p>{day.date || '未识别日期'}</p>
+          <h3>
+            {day.title.replace(
+              /^(day\s*\d+|第\s*\d+\s*天)\s*[:：·]?\s*/i,
+              ''
+            ) || `第 ${day.dayIndex} 天`}
+          </h3>
+          <p>
+            {day.date ? `${day.date} · ` : ''}
+            {day.stops.length} 个沿途停留
+          </p>
         </div>
       </div>
       <div className="stop-list">
@@ -930,7 +1453,7 @@ function StopCard({
       }}
     >
       <div className="stop-card-title">
-        <span>{stop.label}</span>
+        <span>{activitySymbol(stop) || stop.label}</span>
         <h4>{stop.name}</h4>
         {isMatched && stop.poiMatch?.amapUrl && (
           <a
@@ -957,10 +1480,56 @@ function StopCard({
           </button>
         )}
       </div>
+      {(stop.activity || (stop.arrival && stop.arrival.mode !== 'auto')) && (
+        <div className="activity-badges">
+          {stop.activity && <span>{activityDescription(stop)}</span>}
+          {stop.time && <span>{stop.time}</span>}
+          {stop.arrival?.mode === 'ferry' && (
+            <span>乘船 · {stop.arrival.label || '水路'}</span>
+          )}
+          {stop.arrival && !['auto', 'ferry'].includes(stop.arrival.mode) && (
+            <span>
+              {transportNames[stop.arrival.mode]}
+              {stop.arrival.source === 'inferred' ? ' · 模型推断' : ''}
+              {stop.arrival.label ? ' · ' + stop.arrival.label : ''}
+            </span>
+          )}
+        </div>
+      )}
+      {stop.arrival?.reason && (
+        <details className="transport-evidence">
+          <summary>
+            交通依据{stop.arrival.source === 'inferred' ? ' · 推断' : ''}
+          </summary>
+          <p>
+            {stop.arrival.fromName ? `从 ${stop.arrival.fromName} 出发。` : ''}
+            {stop.arrival.reason}
+            {typeof stop.arrival.confidence === 'number'
+              ? ` · 置信度 ${Math.round(stop.arrival.confidence * 100)}%`
+              : ''}
+          </p>
+          {stop.arrival.quote && <p>原文：{stop.arrival.quote}</p>}
+          {stop.arrival.steps?.map((step, i) => (
+            <p key={i}>
+              {transportNames[step.mode]} {step.line} {step.fromName} →{' '}
+              {step.toName} {step.note}
+            </p>
+          ))}
+        </details>
+      )}
       {stop.note && <p>{stop.note}</p>}
+      {stop.activity?.quote && (
+        <details className="activity-source">
+          <summary>原文依据</summary>
+          <p>{stop.activity.quote}</p>
+        </details>
+      )}
+      {placeRegionLabel(stop) && <small>{placeRegionLabel(stop)}</small>}
       {stop.poiMatch?.address && <small>{stop.poiMatch.address}</small>}
       {status === 'unmatched' && (
-        <small>{stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，将仅保留在列表中。</small>
+        <small>
+          {stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，将仅保留在列表中。
+        </small>
       )}
     </article>
   );
@@ -977,7 +1546,11 @@ function DaySelector({
 }) {
   return (
     <div className="day-selector" role="tablist" aria-label="按天筛选">
-      <button className={activeDay === 'all' ? 'active' : ''} onClick={() => onDayChange('all')} type="button">
+      <button
+        className={activeDay === 'all' ? 'active' : ''}
+        onClick={() => onDayChange('all')}
+        type="button"
+      >
         全部
       </button>
       {itinerary.days.map((day) => (
@@ -987,8 +1560,7 @@ function DaySelector({
           onClick={() => onDayChange(day.dayIndex)}
           type="button"
         >
-          <i style={{ background: colorForDay(day.dayIndex) }} />
-          D{day.dayIndex}
+          <i style={{ background: colorForDay(day.dayIndex) }} />D{day.dayIndex}
         </button>
       ))}
     </div>
@@ -997,44 +1569,80 @@ function DaySelector({
 
 function MapView({
   itinerary,
+  displayItinerary,
   activeDay,
   onDayChange,
   onItineraryChange,
+  onPlanningChange,
   routePreference,
   connectDays,
   showRoutes,
   showMapLabels,
   selectedStopId,
   onStopSelect,
-  readOnly
+  onActivityToggle,
+  activityBusy,
+  pendingActivityChanges,
+  readOnly,
+  visible
 }: {
   itinerary: Itinerary | null;
+  displayItinerary: Itinerary | null;
   activeDay: ActiveDay;
   onDayChange: (day: ActiveDay) => void;
   onItineraryChange: (itinerary: Itinerary) => void;
+  onPlanningChange: (busy: boolean) => void;
   routePreference: RoutePreference;
   connectDays: boolean;
   showRoutes: boolean;
   showMapLabels: boolean;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
+  onActivityToggle: (dayIndex: number, option: Stop, include: boolean) => void;
+  activityBusy: boolean;
+  pendingActivityChanges: boolean;
   readOnly: boolean;
+  visible: boolean;
 }) {
+  const mapItinerary = displayItinerary || itinerary;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const amapRef = useRef<AMapNamespace | null>(null);
   const overlaysRef = useRef<any[]>([]);
-  const stopLookupRef = useRef<Map<string, { marker: any; stop: Stop; location: [number, number]; infoWindow: any }>>(new Map());
+  const mapPresentationRef = useRef<ReturnType<typeof createJourneyMap> | null>(
+    null
+  );
+  const drawingRef = useRef<JourneyMapDrawing | null>(null);
+  const stopLookupRef = useRef<
+    Map<
+      string,
+      JourneyMapDrawing['stopLookup'] extends Map<string, infer T> ? T : never
+    >
+  >(new Map());
   const enrichingRef = useRef(false);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapStatus, setMapStatus] = useState('');
   const [mapError, setMapError] = useState('');
+  const [appearance, setAppearance] = useState<JourneyMapAppearance>(() => {
+    try {
+      return localStorage.getItem('map-tour:map-appearance') === 'satellite'
+        ? 'satellite'
+        : 'atlas';
+    } catch {
+      return 'atlas';
+    }
+  });
+  const [tilted, setTilted] = useState(false);
+  const [mapZoom, setMapZoom] = useState(5);
+  const [rotation, setRotation] = useState(0);
 
   useEffect(() => {
     getConfig()
       .then(setConfig)
-      .catch((err) => setMapError(err instanceof Error ? err.message : String(err)));
+      .catch((err) =>
+        setMapError(err instanceof Error ? err.message : String(err))
+      );
   }, []);
 
   useEffect(() => {
@@ -1050,15 +1658,21 @@ function MapView({
       .then((AMap) => {
         if (disposed || !containerRef.current) return;
         amapRef.current = AMap;
-        mapRef.current = new AMap.Map(containerRef.current, {
-          viewMode: '3D',
-          zoom: 5,
-          center: [104.195, 35.861],
-          pitch: 0,
-          mapStyle: 'amap://styles/normal'
+        mapPresentationRef.current = createJourneyMap(
+          AMap,
+          containerRef.current,
+          config.amapMapStyle
+        );
+        mapRef.current = mapPresentationRef.current.map;
+        mapRef.current.on('zoomend', () => {
+          if (!disposed) setMapZoom(mapRef.current.getZoom());
         });
-        mapRef.current.addControl(new AMap.Scale());
-        mapRef.current.addControl(new AMap.ToolBar({ position: 'RT' }));
+        mapRef.current.on('pitchchange', () => {
+          if (!disposed) setTilted(mapRef.current.getPitch() > 1);
+        });
+        mapRef.current.on('rotatechange', () => {
+          if (!disposed) setRotation(mapRef.current.getRotation());
+        });
         setMapReady(true);
         setMapStatus('');
       })
@@ -1069,6 +1683,8 @@ function MapView({
 
     return () => {
       disposed = true;
+      drawingRef.current?.dispose();
+      drawingRef.current = null;
       mapRef.current?.destroy?.();
       mapRef.current = null;
       setMapReady(false);
@@ -1076,22 +1692,88 @@ function MapView({
   }, [config]);
 
   useEffect(() => {
+    if (!mapReady) return;
+    mapPresentationRef.current?.setAppearance(appearance);
+    drawingRef.current?.setAppearance(appearance);
+    drawingRef.current?.layout();
+    try {
+      localStorage.setItem('map-tour:map-appearance', appearance);
+    } catch {
+      /* Storage can be unavailable in private browsing. */
+    }
+  }, [appearance, mapReady]);
+
+  useEffect(() => {
+    if (!visible || !mapReady) return;
+    let timer = 0;
+    const refit = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        mapRef.current?.resize?.();
+        mapRef.current?.clearInfoWindow();
+        if (overlaysRef.current.length)
+          mapRef.current?.setFitView(
+            overlaysRef.current,
+            true,
+            getMapFitPadding(containerRef.current)
+          );
+      }, 120);
+    };
+    const observer = new ResizeObserver(refit);
+    if (containerRef.current) observer.observe(containerRef.current);
+    refit();
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [visible, mapReady]);
+
+  useEffect(() => {
     const AMap = amapRef.current;
-    if (!mapReady || !AMap || !itinerary || readOnly || enrichingRef.current) return;
-    const expectedRouteCount = countExpectedRouteSegments(itinerary, connectDays);
-    if (!hasPendingPoiMatches(itinerary) && itinerary.routeSegments.length >= expectedRouteCount) return;
+    if (!mapReady || !AMap || !itinerary || enrichingRef.current) return;
+    const expectedRouteCount = countExpectedRouteSegments(
+      itinerary,
+      connectDays
+    );
+    if (
+      !itinerary.transportNeedsReview &&
+      !hasPendingPoiMatches(itinerary) &&
+      itinerary.routeSegments.length >= expectedRouteCount
+    )
+      return;
 
     enrichingRef.current = true;
-    enrichItineraryWithAmap(AMap, itinerary, routePreference, connectDays, setMapStatus)
+    onPlanningChange(true);
+    enrichItineraryWithAmap(
+      AMap,
+      itinerary,
+      routePreference,
+      connectDays,
+      setMapStatus,
+      itinerary.transportNeedsReview
+        ? async (value) => (await inferTransport(value)).itinerary
+        : undefined
+    )
       .then((next) => {
         onItineraryChange(next);
         setMapStatus('地点匹配和路线规划完成。');
       })
-      .catch((err) => setMapError(err instanceof Error ? err.message : String(err)))
+      .catch((err) =>
+        setMapError(err instanceof Error ? err.message : String(err))
+      )
       .finally(() => {
         enrichingRef.current = false;
+        onPlanningChange(false);
       });
-  }, [itinerary, onItineraryChange, readOnly, mapReady, routePreference, connectDays]);
+  }, [
+    itinerary,
+    onItineraryChange,
+    onPlanningChange,
+    readOnly,
+    mapReady,
+    routePreference,
+    connectDays
+  ]);
 
   useEffect(() => {
     if (!mapStatus || mapError || !/完成/.test(mapStatus)) return;
@@ -1104,34 +1786,173 @@ function MapView({
     const map = mapRef.current;
     if (!mapReady || !AMap || !map) return;
 
-    if (overlaysRef.current.length) {
-      map.remove(overlaysRef.current);
-      overlaysRef.current = [];
-    }
+    drawingRef.current?.dispose();
+    drawingRef.current = null;
+    overlaysRef.current = [];
 
-    if (!itinerary) return;
-    const drawResult = drawItinerary(AMap, map, itinerary, activeDay, onStopSelect, showRoutes, showMapLabels);
+    if (!mapItinerary) return;
+    const drawResult = drawJourneyMap(
+      AMap,
+      map,
+      containerRef.current!,
+      mapItinerary,
+      activeDay,
+      onStopSelect,
+      showRoutes,
+      showMapLabels,
+      selectedStopId,
+      onActivityToggle,
+      activityBusy,
+      pendingActivityChanges
+    );
+    drawingRef.current = drawResult;
+    drawResult.setAppearance(appearance);
     const overlays = drawResult.overlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
     if (overlays.length) {
-      map.setFitView(overlays, false, getMapFitPadding());
+      map.setFitView(overlays, true, getMapFitPadding(containerRef.current));
     }
-  }, [itinerary, activeDay, onStopSelect, mapReady, showRoutes, showMapLabels]);
+  }, [
+    mapItinerary,
+    activeDay,
+    onStopSelect,
+    mapReady,
+    showRoutes,
+    showMapLabels,
+    onActivityToggle,
+    activityBusy,
+    pendingActivityChanges
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
+    drawingRef.current?.select(selectedStopId);
     if (!mapReady || !map || !selectedStopId) return;
     const hit = stopLookupRef.current.get(selectedStopId);
     if (!hit) return;
-    map.setZoomAndCenter(Math.max(map.getZoom?.() || 14, 15), hit.location);
-    hit.infoWindow.setContent(createInfoWindowHtml(hit.stop));
-    hit.infoWindow.open(map, hit.location);
-  }, [selectedStopId, itinerary, activeDay, mapReady]);
+    openJourneyStop(map, hit);
+  }, [selectedStopId, mapItinerary, activeDay, mapReady]);
 
   return (
-    <div className="map-wrap">
+    <div className={`map-wrap journey-atlas appearance-${appearance}`}>
       <div ref={containerRef} className="map-container" />
+      <div className="map-atlas-shade" />
+      {itinerary && (
+        <>
+          <div className="map-atlas-heading">
+            <span>THE JOURNEY ATLAS</span>
+            <h2>
+              {activeDay === 'all'
+                ? `${itinerary.days.length} 天的足迹`
+                : `第 ${activeDay} 天的路线`}
+            </h2>
+            <p>{itinerary.title}</p>
+            <small>
+              {getVisibleDays(itinerary, activeDay).reduce(
+                (n, day) => n + day.stops.length,
+                0
+              )}{' '}
+              个行程地点 · 拖动地图探索
+            </small>
+          </div>
+          <div
+            className="map-appearance-switch"
+            role="group"
+            aria-label="地图底图"
+          >
+            <button
+              type="button"
+              aria-pressed={appearance === 'atlas'}
+              className={appearance === 'atlas' ? 'active' : ''}
+              onClick={() => setAppearance('atlas')}
+            >
+              <MapPinned size={14} />
+              路线图
+            </button>
+            <button
+              type="button"
+              aria-pressed={appearance === 'satellite'}
+              className={appearance === 'satellite' ? 'active' : ''}
+              onClick={() => setAppearance('satellite')}
+            >
+              <Satellite size={14} />
+              卫星图
+            </button>
+          </div>
+          <div className="map-atlas-tools">
+            <button
+              type="button"
+              aria-label="查看全程"
+              title="查看全程"
+              disabled={!mapReady}
+              onClick={() => {
+                onDayChange('all');
+                mapRef.current?.clearInfoWindow();
+                mapRef.current?.setPitch(0, true);
+                mapRef.current?.setRotation(0, true);
+                mapRef.current?.setFitView(
+                  overlaysRef.current,
+                  true,
+                  getMapFitPadding(containerRef.current)
+                );
+              }}
+            >
+              <LocateFixed size={18} />
+            </button>
+            <button
+              type="button"
+              aria-label="放大地图"
+              title="放大"
+              disabled={!mapReady}
+              onClick={() => mapRef.current?.zoomIn()}
+            >
+              <Plus size={18} />
+            </button>
+            <button
+              type="button"
+              aria-label="缩小地图"
+              title="缩小"
+              disabled={!mapReady}
+              onClick={() => mapRef.current?.zoomOut()}
+            >
+              <Minus size={18} />
+            </button>
+            <button
+              type="button"
+              aria-label="切换倾斜视角"
+              title={
+                mapZoom < 10
+                  ? '放大地图后可倾斜查看'
+                  : tilted
+                    ? '切换俯视'
+                    : '倾斜查看'
+              }
+              disabled={!mapReady || mapZoom < 10}
+              aria-pressed={tilted}
+              onClick={() => mapRef.current?.setPitch(tilted ? 0 : 42, true)}
+            >
+              <Mountain size={17} />
+            </button>
+            <button
+              type="button"
+              aria-label="重置地图朝向"
+              title="朝向正北"
+              disabled={!mapReady}
+              onClick={() => {
+                mapRef.current?.setRotation(0, true);
+                mapRef.current?.setPitch(0, true);
+              }}
+            >
+              <Compass
+                size={18}
+                style={{ transform: `rotate(${-rotation}deg)` }}
+              />
+              <span>N</span>
+            </button>
+          </div>
+        </>
+      )}
       {!itinerary && (
         <div className="map-empty">
           <MapPinned size={32} />
@@ -1145,128 +1966,84 @@ function MapView({
           <span>{mapError || mapStatus}</span>
         </div>
       )}
-      {itinerary && <div className="map-day-filter"><DaySelector itinerary={itinerary} activeDay={activeDay} onDayChange={onDayChange} /></div>}
+      {itinerary && (
+        <div className="map-atlas-legend">
+          <div>
+            {itinerary.days.map((day) => (
+              <button
+                key={day.dayIndex}
+                type="button"
+                aria-pressed={activeDay === day.dayIndex}
+                onClick={() =>
+                  onDayChange(activeDay === day.dayIndex ? 'all' : day.dayIndex)
+                }
+                className={activeDay === day.dayIndex ? 'active' : ''}
+              >
+                <i
+                  style={{
+                    background: atlasDayColor(
+                      day.dayIndex,
+                      appearance === 'atlas'
+                    )
+                  }}
+                />
+                D{day.dayIndex}
+              </button>
+            ))}
+          </div>
+          <span>
+            {getMapOnlyActivities(itinerary, activeDay).length > 0 && (
+              <>
+                <em className="map-activity-key">
+                  <b>餐</b>用餐
+                </em>
+                <em className="map-activity-key stay">
+                  <b>宿</b>住宿
+                </em>
+              </>
+            )}
+            <i />
+            虚线为示意或跨天衔接
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
-function countExpectedRouteSegments(itinerary: Itinerary, connectDays: boolean): number {
-  const inDaySegments = itinerary.days.reduce((total, day) => total + Math.max(day.stops.length - 1, 0), 0);
+function countExpectedRouteSegments(
+  itinerary: Itinerary,
+  connectDays: boolean
+): number {
+  const inDaySegments = itinerary.days.reduce(
+    (total, day) => total + Math.max(day.stops.length - 1, 0),
+    0
+  );
   if (!connectDays) return inDaySegments;
   const routeDays = itinerary.days.filter((day) => day.stops.length > 0);
   return inDaySegments + Math.max(routeDays.length - 1, 0);
 }
 
-function getMapFitPadding(): [number, number, number, number] {
-  if (!window.matchMedia('(max-width: 760px)').matches) {
-    return [90, 90, 120, 90];
-  }
-
-  return [86, 28, 128, 28];
-}
-
-function drawItinerary(
-  AMap: AMapNamespace,
-  map: any,
-  itinerary: Itinerary,
-  activeDay: ActiveDay,
-  onStopSelect: (stopId: string) => void,
-  showRoutes: boolean,
-  showMapLabels: boolean
-) {
-  const overlays: any[] = [];
-  const stopLookup = new Map<string, { marker: any; stop: Stop; location: [number, number]; infoWindow: any }>();
-  const days = getVisibleDays(itinerary, activeDay);
-  const dayIndexes = new Set(days.map((day) => day.dayIndex));
-
-  if (showRoutes) {
-    for (const segment of itinerary.routeSegments) {
-      if (segment.isInterDay) {
-        if (activeDay !== 'all') continue;
-      } else if (activeDay !== 'all' && segment.dayIndex !== activeDay) {
-        continue;
-      }
-      if (segment.path.length < 2) continue;
-      const color = colorForDay(segment.dayIndex);
-      const line = new AMap.Polyline({
-        path: segment.path,
-        strokeColor: color,
-        strokeWeight: segment.mode === 'walking' ? 5 : segment.mode === 'transit' ? 6 : 7,
-        strokeOpacity: segment.status === 'fallback' || segment.isInterDay ? 0.68 : 0.88,
-        strokeStyle: segment.status === 'fallback' || segment.mode === 'walking' || segment.isInterDay ? 'dashed' : 'solid',
-        strokeDasharray: segment.isInterDay ? [14, 9] : [10, 7],
-        lineJoin: 'round',
-        lineCap: 'round',
-        zIndex: segment.isInterDay ? 18 : 20
-      });
-      map.add(line);
-      overlays.push(line);
-    }
-  }
-
-  const infoWindow = new AMap.InfoWindow({
-    isCustom: true,
-    autoMove: true,
-    closeWhenClickMap: true,
-    offset: new AMap.Pixel(0, -32)
-  });
-
-  const stops = [
-    ...days.flatMap((day) => day.stops),
-    ...days.flatMap((day) => day.alternatives),
-    ...(activeDay === 'all' ? itinerary.alternatives : [])
+function getMapFitPadding(
+  container?: HTMLElement | null
+): [number, number, number, number] {
+  const width = container?.clientWidth || window.innerWidth;
+  const height = container?.clientHeight || window.innerHeight;
+  return [
+    Math.min(60, height * 0.14),
+    Math.min(65, width * 0.1),
+    Math.min(85, height * 0.2),
+    Math.min(65, width * 0.1)
   ];
-
-  for (const stop of stops) {
-    const location = stop.poiMatch?.location;
-    if (!location) continue;
-    const color = stop.isAlternative ? '#737688' : colorForDay(stop.dayIndex || [...dayIndexes][0] || 1);
-    const marker = new AMap.Marker({
-      position: location,
-      content: createMarkerHtml(stop, color, Boolean(stop.isAlternative), showMapLabels),
-      offset: new AMap.Pixel(-18, -44),
-      zIndex: stop.isAlternative ? 80 : 100
-    });
-    marker.on('click', () => {
-      onStopSelect(stop.id);
-      infoWindow.setContent(createInfoWindowHtml(stop));
-      infoWindow.open(map, location);
-    });
-    map.add(marker);
-    overlays.push(marker);
-    stopLookup.set(stop.id, { marker, stop, location, infoWindow });
-  }
-
-  return { overlays, stopLookup };
-}
-
-function createMarkerHtml(stop: Stop, color: string, muted: boolean, showName: boolean): string {
-  return `<div class="route-marker-wrap ${muted ? 'muted' : ''}" style="--marker-color:${escapeHtml(color)}">
-    <div class="route-marker"><span>${escapeHtml(stop.label)}</span></div>
-    ${showName ? `<div class="route-marker-name">${escapeHtml(shortMarkerName(stop.name))}</div>` : ''}
-  </div>`;
-}
-
-function shortMarkerName(name: string): string {
-  const normalized = name.replace(/\s+/g, '').trim();
-  return normalized.length > 12 ? `${normalized.slice(0, 11)}…` : normalized;
-}
-
-function createInfoWindowHtml(stop: Stop): string {
-  const amapLink = stop.poiMatch?.amapUrl
-    ? `<a href="${escapeHtml(stop.poiMatch.amapUrl)}" target="_blank" rel="noreferrer">在高德地图打开</a>`
-    : '';
-  return `<div class="poi-window">
-    <strong>${escapeHtml(stop.label)} ${escapeHtml(stop.name)}</strong>
-    ${stop.note ? `<p>${escapeHtml(stop.note)}</p>` : ''}
-    ${stop.poiMatch?.address ? `<small>${escapeHtml(stop.poiMatch.address)}</small>` : ''}
-    ${amapLink}
-  </div>`;
 }
 
 function StatusBlock({ message, error }: { message: string; error: string }) {
   if (!message && !error) return null;
-  return <div className={`status-block ${error ? 'error' : ''}`}>{error || message}</div>;
+  return (
+    <div className={`status-block ${error ? 'error' : ''}`}>
+      {error || message}
+    </div>
+  );
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -1276,13 +2053,4 @@ function EmptyState({ title, body }: { title: string; body: string }) {
       <p>{body}</p>
     </div>
   );
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

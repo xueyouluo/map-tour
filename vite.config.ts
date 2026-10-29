@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        '/api': apiTarget,
+        '/api': { target: apiTarget, changeOrigin: false },
         '/_AMapService': apiTarget
       }
     }

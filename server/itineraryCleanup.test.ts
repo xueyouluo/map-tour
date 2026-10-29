@@ -5,13 +5,15 @@ describe('cleanParsedItinerary titles', () => {
   it('summarizes overly long trip and day titles without changing stops', () => {
     const cleaned = cleanParsedItinerary(
       {
-        title: 'Day1只玩鄞州南部+晚间老城夜景，不跑东部 6.28周日 10:00+ 杭州东高铁→宁波站',
+        title:
+          'Day1只玩鄞州南部+晚间老城夜景，不跑东部 6.28周日 10:00+ 杭州东高铁→宁波站',
         language: 'zh-CN',
         dateRange: { start: '', end: '', label: '6.28-6.30' },
         days: [
           {
             dayIndex: 1,
-            title: 'Day1只玩鄞州南部+晚间老城夜景，不跑东部 6.28周日 10:00+ 杭州东高铁→宁波站',
+            title:
+              'Day1只玩鄞州南部+晚间老城夜景，不跑东部 6.28周日 10:00+ 杭州东高铁→宁波站',
             stops: [
               { order: 1, name: '宁波站', city: '宁波' },
               { order: 2, name: '周尧昆虫博物馆', city: '宁波' },
@@ -27,10 +29,21 @@ describe('cleanParsedItinerary titles', () => {
     );
 
     expect(cleaned.title).toBe('宁波 1 日亲子行程');
-    expect(cleaned.tripScope).toMatchObject({ mode: 'single_city', primaryCity: '宁波', cities: ['宁波'] });
+    expect(cleaned.tripScope).toMatchObject({
+      mode: 'single_city',
+      primaryCity: '宁波',
+      cities: ['宁波']
+    });
     expect(cleaned.days?.[0].title).toBe('周尧昆虫博物馆到老外滩');
-    expect(cleaned.days?.[0].stops?.map((stop) => stop.name)).toEqual(['宁波站', '周尧昆虫博物馆', '鄞州公园', '老外滩']);
-    expect(cleaned.days?.[0].stops?.every((stop) => stop.city === '宁波')).toBe(true);
+    expect(cleaned.days?.[0].stops?.map((stop) => stop.name)).toEqual([
+      '宁波站',
+      '周尧昆虫博物馆',
+      '鄞州公园',
+      '老外滩'
+    ]);
+    expect(cleaned.days?.[0].stops?.every((stop) => stop.city === '宁波')).toBe(
+      true
+    );
   });
 
   it('does not force a return city onto every stop in cross-city road trips', () => {
@@ -71,7 +84,12 @@ day5雅安开车回重庆。`;
 
     const stops = cleaned.days?.flatMap((day) => day.stops || []) || [];
     expect(cleaned.tripScope?.mode).toBe('multi_city');
-    expect(stops.map((stop) => stop.name)).toEqual(['康定', '泸定', '雅安', '雅安']);
+    expect(stops.map((stop) => stop.name)).toEqual([
+      '康定',
+      '泸定',
+      '雅安',
+      '雅安'
+    ]);
     expect(stops.every((stop) => !stop.city)).toBe(true);
   });
 
@@ -115,9 +133,14 @@ day5雅安开车回重庆。`;
       '川西小环线规划，开车经过墨石公园、塔公草原、新都桥、康定、泸定、雅安。'
     );
 
-    expect(cleaned.tripScope).toMatchObject({ mode: 'multi_city', primaryCity: '' });
+    expect(cleaned.tripScope).toMatchObject({
+      mode: 'multi_city',
+      primaryCity: ''
+    });
     expect(cleaned.tripScope?.cities).toContain('甘孜藏族自治州');
-    expect(cleaned.days?.flatMap((day) => day.stops || []).map((stop) => stop.city)).toEqual([
+    expect(
+      cleaned.days?.flatMap((day) => day.stops || []).map((stop) => stop.city)
+    ).toEqual([
       '甘孜藏族自治州',
       '甘孜藏族自治州',
       '甘孜藏族自治州',
@@ -126,4 +149,83 @@ day5雅安开车回重庆。`;
       '雅安'
     ]);
   });
+});
+
+it('keeps island trips within one destination and preserves province, city, county and scenic context', () => {
+  const result = cleanParsedItinerary(
+    {
+      title: '平潭环岛三日游',
+      tripScope: {
+        mode: 'multi_city',
+        cities: ['平潭'],
+        reason: '主要景点均在平潭岛'
+      },
+      days: [
+        {
+          stops: [
+            {
+              name: '北港村',
+              province: '福建省',
+              city: '福州市',
+              district: '平潭县',
+              locationHint: '君山镇'
+            }
+          ]
+        }
+      ]
+    },
+    '平潭岛内环岛游'
+  );
+  expect(result.tripScope).toMatchObject({
+    mode: 'single_city',
+    primaryCity: '平潭'
+  });
+  expect(result.days?.[0].stops?.[0]).toMatchObject({
+    province: '福建省',
+    city: '福州市',
+    district: '平潭县',
+    locationHint: '君山镇'
+  });
+});
+
+it('does not let negated cross-city wording or county driving notes override a model single-city scope', () => {
+  const result = cleanParsedItinerary(
+    {
+      title: '平潭三日游',
+      tripScope: {
+        mode: 'single_city',
+        primaryCity: '平潭县',
+        cities: ['平潭县']
+      },
+      days: [
+        {
+          stops: [
+            {
+              name: '北港村',
+              province: '福建省',
+              city: '福州市',
+              district: '平潭县'
+            }
+          ]
+        }
+      ]
+    },
+    '所有地点都在平潭岛内，不跨城，自驾回县城住宿。'
+  );
+  expect(result.tripScope?.mode).toBe('single_city');
+  const corrected = cleanParsedItinerary(
+    {
+      title: '平潭环岛游',
+      tripScope: {
+        mode: 'multi_city',
+        cities: ['平潭县'],
+        reason: '主要地点都在平潭岛内，不跨城'
+      },
+      days: [
+        { stops: [{ name: '北港村', city: '福州市', district: '平潭县' }] }
+      ]
+    },
+    '平潭岛内环岛游，不跨城'
+  );
+  expect(corrected.tripScope?.mode).toBe('single_city');
 });

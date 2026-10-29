@@ -2,6 +2,8 @@ import type { Itinerary, ItinerarySummary } from './shared/itinerary';
 
 export interface RuntimeConfig {
   amapKey: string;
+  canManageSettings?: boolean;
+  amapMapStyle?: string;
   hasAmapProxy: boolean;
   hasAiRuntime: boolean;
   hasOpenAI: boolean;
@@ -9,7 +11,7 @@ export interface RuntimeConfig {
 
 export interface ParseResponse {
   itinerary: Itinerary;
-  source: 'openai' | 'ark' | 'local-fallback';
+  source: 'openai' | 'local-fallback';
   warning?: string;
 }
 
@@ -23,7 +25,10 @@ export async function getConfig(): Promise<RuntimeConfig> {
   return fetchJson('/api/config');
 }
 
-export async function parseItinerary(text: string, image?: File | null): Promise<ParseResponse> {
+export async function parseItinerary(
+  text: string,
+  image?: File | null
+): Promise<ParseResponse> {
   const formData = new FormData();
   formData.set('text', text);
   if (image) formData.set('image', image);
@@ -50,7 +55,8 @@ export async function parseItineraryStream(
   });
 
   if (!response.ok) return parseResponse(response);
-  if (!response.body) throw new Error('Browser does not support streaming responses.');
+  if (!response.body)
+    throw new Error('Browser does not support streaming responses.');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -82,7 +88,9 @@ export async function parseItineraryStream(
   return result;
 }
 
-export async function saveItinerary(itinerary: Itinerary): Promise<{ itinerary: Itinerary; shareUrl: string }> {
+export async function saveItinerary(
+  itinerary: Itinerary
+): Promise<{ itinerary: Itinerary; shareUrl: string }> {
   return fetchJson('/api/itineraries', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -90,12 +98,18 @@ export async function saveItinerary(itinerary: Itinerary): Promise<{ itinerary: 
   });
 }
 
-export async function loadItinerary(id: string): Promise<{ itinerary: Itinerary }> {
+export async function loadItinerary(
+  id: string
+): Promise<{ itinerary: Itinerary; editable?: boolean }> {
   return fetchJson(`/api/itineraries/${encodeURIComponent(id)}`);
 }
 
-export async function listItineraries(limit = 100): Promise<{ items: ItinerarySummary[] }> {
-  return fetchJson(`/api/itineraries?limit=${encodeURIComponent(String(limit))}`);
+export async function listItineraries(
+  limit = 100
+): Promise<{ items: ItinerarySummary[] }> {
+  return fetchJson(
+    `/api/itineraries?limit=${encodeURIComponent(String(limit))}`
+  );
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -106,7 +120,19 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401)
+      window.dispatchEvent(new Event('map-tour:auth-required'));
     throw new Error(payload.error || response.statusText);
   }
   return payload as T;
+}
+
+export async function inferTransport(
+  itinerary: Itinerary
+): Promise<{ itinerary: Itinerary }> {
+  return fetchJson('/api/transport', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ itinerary })
+  });
 }
