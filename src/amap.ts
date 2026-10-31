@@ -15,6 +15,7 @@ import {
 } from './shared/poiMatching';
 import { activitySymbol } from './shared/activities';
 import { hasValidLocation } from './shared/stopLocations';
+import { requestAmapResult } from './shared/amapRequest';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { chooseRouteMode, distanceMeters } from './shared/geo';
 import { getVisibleDays } from './shared/itinerary';
@@ -230,11 +231,8 @@ async function resolvePlaceContext(
       (async () => {
         for (let attempt = 0; attempt <= MAX_AMAP_RETRIES; attempt++) {
           await waitForAmapSlot();
-          const result: any = await new Promise((resolve) =>
-            new AMap.Geocoder().getLocation(
-              address,
-              (status: string, data: any) => resolve({ status, data })
-            )
+          const result = await requestAmapResult((finish) =>
+            new AMap.Geocoder().getLocation(address, finish)
           );
           const place = result.data?.geocodes?.[0];
           const admin = place?.addressComponent || place;
@@ -284,11 +282,7 @@ export async function searchPoiCandidates(
   const city = context.district || context.city || context.province;
   for (let attempt = 0; attempt <= MAX_AMAP_RETRIES; attempt++) {
     await waitForAmapSlot();
-    const result: any = await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('地点搜索超时，请重试。')),
-        15000
-      );
+    const result = await requestAmapResult((finish) => {
       const search = new AMap.PlaceSearch({
         city,
         citylimit: Boolean(city),
@@ -296,10 +290,7 @@ export async function searchPoiCandidates(
         pageIndex: 1,
         extensions: 'all'
       });
-      search.search(keyword, (status: string, data: any) => {
-        clearTimeout(timer);
-        resolve({ status, data });
-      });
+      search.search(keyword, finish);
     });
     const error = getAmapErrorInfo(result.status, result.data);
     if (
@@ -337,11 +328,19 @@ async function matchStop(
   let errorInfo = '';
   let errorCode = '';
   let lastQuery = '';
-  for (const query of placeQueries(stop, context)) {
+  if (
+    tripScope?.mode === 'multi_city' && (tripScope.cities?.length || 0) > 1 &&
+    !context.city && !context.province
+  ) return {
+    status: 'unmatched', matchVersion: 2, name: stop.name, confidence: 0,
+    candidates: [], errorCode: 'MISSING_REGION',
+    errorInfo: '多城市行程的这个地点未注明所在城市，请补充城市后搜索，避免匹配到异地同名地点'
+  };
+  queryLoop: for (const query of placeQueries(stop, context)) {
     lastQuery = query;
     for (let attempt = 0; attempt <= MAX_AMAP_RETRIES; attempt++) {
       await waitForAmapSlot();
-      const result: any = await new Promise((resolve) => {
+      const result = await requestAmapResult((finish) => {
         const search = new AMap.PlaceSearch({
           city: searchCity || undefined,
           citylimit: Boolean(searchCity),
@@ -349,9 +348,7 @@ async function matchStop(
           pageIndex: 1,
           extensions: 'all'
         });
-        search.search(query, (status: string, data: any) =>
-          resolve({ status, data })
-        );
+        search.search(query, finish);
       });
       errorInfo = getAmapErrorInfo(result.status, result.data);
       errorCode = result.data?.infocode || result.status;
@@ -359,6 +356,9 @@ async function matchStop(
         await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
         continue;
       }
+      // A service failure is not a failed keyword guess. Do not repeat it for
+      // every alternate spelling and stall the rest of the itinerary.
+      if (!['complete', 'no_data'].includes(result.status)) break queryLoop;
       for (const raw of result.data?.poiList?.pois || []) {
         const candidate = normalizePoi(raw);
         if (
@@ -544,7 +544,7 @@ function searchRoute(
   return searchRouteWithRetry(planner, start, end, stepsKey, 0);
 }
 
-function searchRouteWithRetry(
+async function searchRouteWithRetry(
   planner: any,
   start: Coordinate,
   end: Coordinate,
@@ -555,47 +555,21 @@ function searchRouteWithRetry(
   distanceMeters?: number;
   durationSeconds?: number;
 }> {
-  return waitForAmapSlot()
-    .then(
-      () =>
-        new Promise<{
-          path: Coordinate[];
-          distanceMeters?: number;
-          durationSeconds?: number;
-          errorInfo?: string;
-          errorCode?: string;
-        }>((resolve) => {
-          planner.search(start, end, (status: string, result: any) => {
-            if (status !== 'complete') {
-              resolve({
-                path: [],
-                errorInfo: getAmapErrorInfo(status, result),
-                errorCode: result?.infocode || status
-              });
-              return;
-            }
-
-            const route = result?.routes?.[0] || result?.plans?.[0];
-            const steps = route?.[stepsKey] || [];
-            const path = flattenRoutePath(steps);
-            resolve({
-              path,
-              distanceMeters: route?.distance,
-              durationSeconds: route?.time || route?.duration
-            });
-          });
-        })
-    )
-    .then(async (result) => {
-      if (
-        isQpsLimitError(result.errorInfo, result.errorCode) &&
-        attempt < MAX_AMAP_RETRIES
-      ) {
-        await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
-        return searchRouteWithRetry(planner, start, end, stepsKey, attempt + 1);
-      }
-      return result;
-    });
+  await waitForAmapSlot();
+  const reply = await requestAmapResult((finish) => planner.search(start, end, finish));
+  if (reply.status !== 'complete') {
+    if (isQpsLimitError(getAmapErrorInfo(reply.status, reply.data), reply.data?.infocode) && attempt < MAX_AMAP_RETRIES) {
+      await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
+      return searchRouteWithRetry(planner, start, end, stepsKey, attempt + 1);
+    }
+    return { path: [] };
+  }
+  const route = reply.data?.routes?.[0] || reply.data?.plans?.[0];
+  return {
+    path: flattenRoutePath(route?.[stepsKey] || []),
+    distanceMeters: route?.distance,
+    durationSeconds: route?.time || route?.duration
+  };
 }
 
 function flattenRoutePath(steps: any[]): Coordinate[] {
@@ -654,8 +628,8 @@ function createAmapMarkerUrl(poi: PoiCandidate): string {
 
 function getAmapErrorInfo(status: string, result: any): string {
   if (status === 'no_data') return '高德未返回匹配 POI';
-  if (status === 'error' || result?.status === '0') {
-    const info = result?.info || '高德接口错误';
+  if (status === 'error' || status === 'timeout' || result?.status === '0') {
+    const info = typeof result === 'string' ? result : result?.info || '高德接口错误';
     const code = result?.infocode ? ` (${result.infocode})` : '';
     return `${info}${code}`;
   }

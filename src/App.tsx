@@ -83,6 +83,7 @@ import {
 import {
   colorForDay,
   getVisibleDays,
+  getAllStops,
   hasPendingPoiMatches,
   removeStopFromItinerary,
   type Itinerary,
@@ -1921,6 +1922,7 @@ function MapView({
       return;
 
     enrichingRef.current = true;
+    setMapError('');
     onPlanningChange(true);
     enrichItineraryWithAmap(
       AMap,
@@ -1934,11 +1936,15 @@ function MapView({
     )
       .then((next) => {
         onItineraryChange(next);
-        setMapStatus('地点匹配和路线规划完成。');
+        const unresolved = new Set(getAllStops(next).filter(stop => stop.poiMatch?.status !== 'matched').map(stop => stop.id)).size;
+        setMapStatus(unresolved
+          ? `匹配完成，${unresolved} 处地点未找到，可在行程中点击“确认位置”。`
+          : '地点匹配和路线规划完成。');
       })
-      .catch((err) =>
-        setMapError(err instanceof Error ? err.message : String(err))
-      )
+      .catch((err) => {
+        setMapStatus('');
+        setMapError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => {
         enrichingRef.current = false;
         onPlanningChange(false);
@@ -2140,7 +2146,7 @@ function MapView({
       )}
       {(mapStatus || mapError) && (
         <div className={`map-toast ${mapError ? 'error' : ''}`}>
-          {mapStatus && !mapError && <Loader2 className="spin" size={16} />}
+          {mapStatus && !mapError && (/完成/.test(mapStatus) ? <Check size={16} /> : <Loader2 className="spin" size={16} />)}
           <span>{mapError || mapStatus}</span>
         </div>
       )}
