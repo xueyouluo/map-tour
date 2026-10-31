@@ -4,8 +4,34 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeParsedItinerary } from '../src/shared/itinerary';
 import { ItineraryStore } from './storage';
+import { DatabaseSync } from 'node:sqlite';
 
 describe('ItineraryStore', () => {
+  it('migrates an existing history database and persists trash across reopen without losing payloads', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'map-tour-trash-'));
+    const dbPath = path.join(dir, 'itineraries.sqlite');
+    const old = new DatabaseSync(dbPath);
+    const trip = { ...normalizeParsedItinerary({ title: '旧草稿', days: [{ stops: [{ name: '西湖' }] }] }), id: 'legacy-trip' };
+    old.exec('create table itineraries (id text primary key, payload text not null, created_at text not null, updated_at text not null)');
+    old.prepare('insert into itineraries values (?,?,?,?)').run(trip.id, JSON.stringify(trip), '2026-01-01', '2026-01-01');
+    old.close();
+    let store = new ItineraryStore(dbPath);
+    try {
+      expect((await store.get(trip.id))?.title).toBe('旧草稿');
+      await store.setTrashed(trip.id, true, { userId: 'admin', admin: true });
+      store.close();
+      store = new ItineraryStore(dbPath);
+      expect(await store.get(trip.id)).toBeNull();
+      expect(await store.listSummaries()).toEqual([]);
+      expect(await store.listSummaries(100, undefined, true)).toHaveLength(1);
+      await store.setTrashed(trip.id, false, { userId: 'admin', admin: true });
+      expect((await store.get(trip.id))?.days).toEqual(trip.days);
+      await expect(store.setTrashed('missing', true, { userId: 'admin', admin: true })).rejects.toThrow('没有找到');
+    } finally {
+      store.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it('saves and reads itineraries from a SQLite database', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'map-tour-test-'));
     const dbPath = path.join(dir, 'itineraries.sqlite');

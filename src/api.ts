@@ -109,11 +109,20 @@ export async function loadItinerary(
 }
 
 export async function listItineraries(
-  limit = 100
+  limit = 100,
+  trashed = false
 ): Promise<{ items: ItinerarySummary[] }> {
   return fetchJson(
-    `/api/itineraries?limit=${encodeURIComponent(String(limit))}`
+    `/api/itineraries?limit=${encodeURIComponent(String(limit))}${trashed ? '&trashed=true' : ''}`
   );
+}
+
+export async function deleteItinerary(id: string): Promise<void> {
+  return fetchJson(`/api/itineraries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function restoreItinerary(id: string): Promise<void> {
+  return fetchJson(`/api/itineraries/${encodeURIComponent(id)}/restore`, { method: 'POST' });
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -122,6 +131,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
+  if (response.status === 204) return undefined as T;
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401)

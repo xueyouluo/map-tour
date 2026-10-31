@@ -113,6 +113,7 @@ async function fixture() {
     return fetch(origin + url, {
       method,
       headers: {
+        ...(!['GET', 'HEAD'].includes(method) ? { Origin: origin } : {}),
         ...(body !== undefined
           ? { 'Content-Type': 'application/json', Origin: origin }
           : {}),
@@ -309,6 +310,52 @@ it('enforces the three-itinerary limit atomically while preserving edits, privat
   const legacy = await store.save(input());
   expect(await store.getAccessible(legacy.id)).not.toBeNull();
   await expect(store.save(legacy, other)).rejects.toThrow('自己的行程');
+});
+
+it('moves history to a private recycle bin, restores shared links and preserves cumulative quotas', async () => {
+  const { auth, store, call } = await fixture();
+  const alice = await auth.create({ username: 'alice', password });
+  const bob = await auth.create({ username: 'bob', password });
+  await auth.create({ username: 'admin', password }, 'admin');
+  const aliceCookie = cookie(await call('/api/auth/login', 'POST', { username: 'alice', password }));
+  const bobCookie = cookie(await call('/api/auth/login', 'POST', { username: 'bob', password }));
+  const adminCookie = cookie(await call('/api/auth/login', 'POST', { username: 'admin', password }));
+  const access = { userId: alice.id, admin: false };
+  const input = () => normalizeParsedItinerary({ title: '回收站测试', days: [{ stops: [{ name: '西湖' }] }] });
+  const trip = await store.save({ ...input(), shareStatus: 'shared' }, access);
+  const route = '/api/itineraries/' + trip.id;
+  expect((await call(route)).status).toBe(200);
+  expect((await call(route, 'DELETE')).status).toBe(401);
+  expect((await call(route, 'DELETE', undefined, bobCookie)).status).toBe(404);
+  expect((await call(route, 'DELETE', undefined, aliceCookie, { Origin: 'https://evil.test' })).status).toBe(403);
+  expect((await call(route, 'DELETE', undefined, aliceCookie)).status).toBe(204);
+  expect((await call(route, 'DELETE', undefined, aliceCookie)).status).toBe(204);
+  expect((await call(route)).status).toBe(404);
+  expect((await call(route, 'GET', undefined, aliceCookie)).status).toBe(404);
+  expect(await store.get(trip.id)).toBeNull();
+  expect(Object.values(await store.list())).toEqual([]);
+  expect((await (await call('/api/itineraries', 'GET', undefined, aliceCookie)).json()).items).toEqual([]);
+  const bin = await (await call('/api/itineraries?trashed=true', 'GET', undefined, aliceCookie)).json();
+  expect(bin.items.map((item: { id: string }) => item.id)).toEqual([trip.id]);
+  expect((await (await call('/api/itineraries?trashed=true', 'GET', undefined, bobCookie)).json()).items).toEqual([]);
+  expect((await call('/api/itineraries', 'POST', { ...trip, title: 'stale autosave' }, aliceCookie)).status).toBe(409);
+  expect((await call(route + '/restore', 'POST', undefined, bobCookie)).status).toBe(404);
+  expect((await call(route + '/restore', 'POST', undefined, aliceCookie, { Origin: 'https://evil.test' })).status).toBe(403);
+  expect((await call(route + '/restore', 'POST', undefined, aliceCookie)).status).toBe(204);
+  expect((await store.get(trip.id))?.title).toBe(trip.title);
+  expect((await call(route)).status).toBe(200);
+  expect(auth.user(alice.id)?.itineraryCount).toBe(1);
+  await store.save(input(), access);
+  await store.save(input(), access);
+  await store.setTrashed(trip.id, true, access);
+  await expect(store.save(input(), access)).rejects.toThrow('额度');
+  await store.setTrashed(trip.id, false, access);
+  expect(auth.user(alice.id)?.itineraryCount).toBe(3);
+  expect(auth.user(bob.id)?.itineraryCount).toBe(0);
+  const legacy = await store.save(input());
+  expect((await call('/api/itineraries/' + legacy.id, 'DELETE', undefined, aliceCookie)).status).toBe(404);
+  expect((await call('/api/itineraries/' + legacy.id, 'DELETE', undefined, adminCookie)).status).toBe(204);
+  expect((await call('/api/itineraries/' + legacy.id + '/restore', 'POST', undefined, adminCookie)).status).toBe(204);
 });
 it('supports quota adjustments, account disabling, password resets, revocation and last-admin protection', async () => {
   const { auth, call } = await fixture();

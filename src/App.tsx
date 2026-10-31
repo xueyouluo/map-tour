@@ -48,6 +48,7 @@ import {
   SlidersHorizontal,
   Settings2,
   Pencil,
+  RotateCcw,
   Trash2,
   X,
   type LucideIcon
@@ -70,6 +71,8 @@ import { AppDialog } from './AppDialog';
 import { SettingsPanel, SettingsPage } from './SettingsPanel';
 import {
   getConfig,
+  deleteItinerary,
+  restoreItinerary,
   inferTransport,
   listItineraries,
   loadItinerary,
@@ -902,10 +905,19 @@ function HistoryPage() {
   const [items, setItems] = useState<ItinerarySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [trashed, setTrashed] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ItinerarySummary | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     let disposed = false;
-    listItineraries()
+    setLoading(true);
+    setError('');
+    setActionError('');
+    setNotice('');
+    listItineraries(200, trashed)
       .then((result) => {
         if (!disposed) setItems(result.items);
       })
@@ -919,7 +931,22 @@ function HistoryPage() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [trashed]);
+
+  async function changeRecord(item: ItinerarySummary, restore: boolean) {
+    if (busyId) return;
+    setBusyId(item.id);
+    setActionError('');
+    setNotice('');
+    try {
+      await (restore ? restoreItinerary(item.id) : deleteItinerary(item.id));
+      setItems((rows) => rows.filter((row) => row.id !== item.id));
+      setPendingDelete(null);
+      setNotice(restore ? `已恢复「${item.title}」，可在历史行程中打开。` : `「${item.title}」已移入回收站，可随时恢复。`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '操作失败，请稍后重试。');
+    } finally { setBusyId(null); }
+  }
 
   return (
     <div className="history-page">
@@ -942,10 +969,21 @@ function HistoryPage() {
             <HistoryIcon size={22} />
           </div>
           <div>
-            <h1>历史行程</h1>
-            <p>这里显示解析后自动保存的草稿，以及已经生成分享链接的行程。</p>
+            <h1>{trashed ? '回收站' : '历史行程'}</h1>
+            <p>{trashed ? '删除的行程保留在这里。恢复后，原有路线和分享状态一并恢复。' : '自动保存的草稿和已分享的旅程，都在这里。可以删除不需要的记录。'}</p>
           </div>
         </section>
+        <div className="history-toolbar" aria-label="历史记录范围">
+          <button type="button" className="history-scope" aria-pressed={!trashed} disabled={Boolean(busyId)} onClick={() => setTrashed(false)}>
+            <HistoryIcon size={16} />历史行程
+          </button>
+          <button type="button" className="history-scope" aria-pressed={trashed} disabled={Boolean(busyId)} onClick={() => setTrashed(true)}>
+            <Trash2 size={16} />回收站
+          </button>
+          {!loading && !error && <span>{items.length} 条记录</span>}
+        </div>
+        {notice && <p className="history-notice" role="status">{notice}</p>}
+        {actionError && !pendingDelete && <p className="history-action-error" role="alert">{actionError}</p>}
 
         {loading && (
           <div className="history-state">
@@ -958,41 +996,72 @@ function HistoryPage() {
         )}
         {!loading && !error && items.length === 0 && (
           <div className="history-state">
-            还没有历史行程。生成并分享一次行程后，这里会出现记录。
+            {trashed ? '回收站是空的。' : '还没有历史行程，导入行程后会自动保存在这里。'}
           </div>
         )}
         {!loading && !error && items.length > 0 && (
           <div className="history-grid">
             {items.map((item) => (
-              <a
+              <article
                 className="history-card"
                 key={item.id}
-                href={`/s/${encodeURIComponent(item.id)}`}
               >
-                <div className="history-card-main">
-                  <span className={`history-status-badge ${item.shareStatus}`}>
-                    {item.shareStatus === 'shared' ? '已分享' : '草稿'}
-                  </span>
-                  <h2>{item.title}</h2>
-                  <div className="date-line">
-                    <CalendarDays size={15} />
-                    <span>{formatHistoryDateRange(item)}</span>
-                  </div>
-                  <TripScopeLine scope={item.tripScope} />
-                  <div className="history-card-meta">
-                    <span>{item.daysCount} 天</span>
-                    <span>{item.stopCount} 个地点</span>
-                    <span>更新于 {formatHistoryTime(item.updatedAt)}</span>
-                  </div>
+                {trashed ? <div className="history-card-link"><HistoryRecord item={item} /></div> : <a className="history-card-link" href={`/s/${encodeURIComponent(item.id)}`}>
+                  <HistoryRecord item={item} />
+                  <span className="history-open-icon" aria-hidden="true"><ExternalLink size={17} /></span>
+                </a>}
+                <div className="history-card-actions">
+                  <span>{trashed ? '恢复后可继续编辑' : '自动保存到账号'}</span>
+                  <button type="button" className={`history-record-action ${trashed ? '' : 'danger'}`} disabled={Boolean(busyId)}
+                    aria-label={`${trashed ? '恢复' : '删除'}行程 ${item.title}`}
+                    onClick={() => {
+                      setActionError('');
+                      if (trashed) void changeRecord(item, true);
+                      else setPendingDelete(item);
+                    }}>
+                    {busyId === item.id ? <Loader2 size={16} className="spin" /> : trashed ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                    {busyId === item.id ? '处理中…' : trashed ? '恢复行程' : '删除'}
+                  </button>
                 </div>
-                <span className="history-open-icon" aria-hidden="true">
-                  <ExternalLink size={17} />
-                </span>
-              </a>
+              </article>
             ))}
           </div>
         )}
+        {pendingDelete && <AppDialog title="删除这个行程？" busy={Boolean(busyId)} onClose={() => { setPendingDelete(null); setActionError(''); }}>
+          <div className="history-delete-dialog">
+            <p>「{pendingDelete.title}」将移入回收站，可以随时恢复。</p>
+            <p>{pendingDelete.shareStatus === 'shared' ? '分享链接会暂时失效，恢复后可继续访问。' : '草稿会从历史列表中移除。'} 已消耗的生成额度不会返还。</p>
+            {actionError && <p className="history-action-error" role="alert">{actionError}</p>}
+            <div className="history-dialog-actions">
+              <button type="button" className="history-record-action" disabled={Boolean(busyId)} onClick={() => { setPendingDelete(null); setActionError(''); }}>取消</button>
+              <button type="button" className="history-record-action danger" disabled={Boolean(busyId)} onClick={() => void changeRecord(pendingDelete, false)}>
+                {busyId ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}{busyId ? '正在删除…' : '移入回收站'}
+              </button>
+            </div>
+          </div>
+        </AppDialog>}
       </main>
+    </div>
+  );
+}
+
+function HistoryRecord({ item }: { item: ItinerarySummary }) {
+  return (
+    <div className="history-card-main">
+      <span className={`history-status-badge ${item.shareStatus}`}>
+        {item.shareStatus === 'shared' ? '已分享' : '草稿'}
+      </span>
+      <h2>{item.title}</h2>
+      <div className="date-line">
+        <CalendarDays size={15} />
+        <span>{formatHistoryDateRange(item)}</span>
+      </div>
+      <TripScopeLine scope={item.tripScope} />
+      <div className="history-card-meta">
+        <span>{item.daysCount} 天</span>
+        <span>{item.stopCount} 个地点</span>
+        <span>更新于 {formatHistoryTime(item.updatedAt)}</span>
+      </div>
     </div>
   );
 }

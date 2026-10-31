@@ -1469,6 +1469,34 @@
   border-color: #39485c;
   color: #8599b4;
 }
+.history-toolbar .history-scope,
+.history-card .history-record-action {
+  background: #222e3e;
+  border-color: #3b4b63;
+  color: #a5b7d0;
+}
+.history-toolbar .history-scope[aria-pressed='true'] {
+  background: #2a405e;
+  border-color: #718fb8;
+  color: #d6e6ff;
+}
+.history-card-actions { border-color: #ffffff12; }
+.history-card-actions > span,
+.history-toolbar > span { color: #91a3bd; }
+.history-card .history-record-action.danger {
+  background: #9b565618;
+  border-color: #795353;
+  color: #e3b0b0;
+}
+.history-card .history-record-action:hover:not(:disabled) { background: #30415a; }
+.history-card .history-record-action.danger:hover:not(:disabled) { background: #59373c; }
+.history-notice { background: #20354e; color: #c2d8f3; }
+.history-page > .history-main > .history-action-error { background: #462c35; color: #f0bbc0; }
+.history-page .history-status-badge.draft {
+  background: #233a59;
+  border-color: #496e9a;
+  color: #adc7ed;
+}
 /* Film C, revised to a navy and ice-blue interface. Daily route colors are data. */
 :root {
   background: #0f1521;

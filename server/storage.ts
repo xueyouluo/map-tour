@@ -23,6 +23,7 @@ interface ItineraryRow {
   payload: string;
   created_at: string;
   updated_at: string;
+  trashed_at?: string | null;
 }
 
 export class ItineraryStore {
@@ -41,7 +42,7 @@ export class ItineraryStore {
 
   async list(): Promise<Store> {
     const rows = this.database()
-      .prepare('select * from itineraries order by created_at asc')
+      .prepare('select * from itineraries where trashed_at is null order by created_at asc')
       .all() as unknown as ItineraryRow[];
     return rows.reduce<Store>((store, row) => {
       const record = rowToRecord(row);
@@ -52,26 +53,28 @@ export class ItineraryStore {
 
   async listSummaries(
     limit = 100,
-    access?: { userId: string; admin: boolean }
+    access?: { userId: string; admin: boolean },
+    trashed = false
   ): Promise<ItinerarySummary[]> {
     const safeLimit = Math.min(Math.max(Math.trunc(limit) || 100, 1), 200);
+    const state = trashed ? 'trashed_at is not null' : 'trashed_at is null';
     const rows = access
       ? (this.database()
           .prepare(
             access.admin
-              ? 'select * from itineraries where owner_id=? or owner_id is null order by updated_at desc limit ?'
-              : 'select * from itineraries where owner_id=? order by updated_at desc limit ?'
+              ? `select * from itineraries where (owner_id=? or owner_id is null) and ${state} order by updated_at desc limit ?`
+              : `select * from itineraries where owner_id=? and ${state} order by updated_at desc limit ?`
           )
           .all(access.userId, safeLimit) as unknown as ItineraryRow[])
       : (this.database()
-          .prepare('select * from itineraries order by updated_at desc limit ?')
+          .prepare(`select * from itineraries where ${state} order by updated_at desc limit ?`)
           .all(safeLimit) as unknown as ItineraryRow[]);
     return rows.map(rowToSummary);
   }
 
   async get(id: string): Promise<StoredItinerary | null> {
     const row = this.database()
-      .prepare('select * from itineraries where id = ?')
+      .prepare('select * from itineraries where id = ? and trashed_at is null')
       .get(id) as unknown as ItineraryRow | undefined;
     return row ? rowToRecord(row) : null;
   }
@@ -87,9 +90,9 @@ export class ItineraryStore {
     db.exec('begin immediate');
     try {
       const previous = db
-        .prepare('select created_at,owner_id from itineraries where id = ?')
+        .prepare('select created_at,owner_id,trashed_at from itineraries where id = ?')
         .get(id) as unknown as
-        { created_at: string; owner_id: string | null } | undefined;
+        { created_at: string; owner_id: string | null; trashed_at: string | null } | undefined;
       if (access) {
         if (previous && previous.owner_id !== access.userId && !access.admin)
           throw new HttpError(403, '只能修改自己的行程；请另存为新行程。');
@@ -121,6 +124,8 @@ export class ItineraryStore {
           ).run(access.userId);
         }
       }
+      if (previous?.trashed_at)
+        throw new HttpError(409, '这个行程已在回收站中，请先恢复再编辑。');
       const record: StoredItinerary = {
         ...itinerary,
         id,
@@ -156,7 +161,7 @@ export class ItineraryStore {
     access?: { userId: string; admin: boolean }
   ): Promise<{ itinerary: StoredItinerary; editable: boolean } | null> {
     const row = this.database()
-      .prepare('select * from itineraries where id=?')
+      .prepare('select * from itineraries where id=? and trashed_at is null')
       .get(id) as unknown as ItineraryRow | undefined;
     if (!row) return null;
     const itinerary = rowToRecord(row);
@@ -171,6 +176,15 @@ export class ItineraryStore {
   close(): void {
     this.db?.close();
     this.db = undefined;
+  }
+
+  async setTrashed(id: string, trashed: boolean, access: { userId: string; admin: boolean }): Promise<void> {
+    // One guarded statement keeps deletion/restoration atomic and hides other owners' IDs.
+    const result = this.database().prepare(
+      `update itineraries set trashed_at=? where id=?${access.admin ? '' : ' and owner_id=?'}`
+    ).run(trashed ? new Date().toISOString() : null, id, ...(access.admin ? [] : [access.userId]));
+    if (!result.changes) throw new HttpError(404, '没有找到这个行程，或你没有管理权限。');
+    // Creation quotas are cumulative: deleting/restoring does not change the counter.
   }
 
   private database(): DatabaseSync {
@@ -192,6 +206,8 @@ export class ItineraryStore {
         .all() as { name: string }[];
       if (!columns.some((column) => column.name === 'owner_id'))
         this.db.exec('alter table itineraries add column owner_id text');
+      if (!columns.some((column) => column.name === 'trashed_at'))
+        this.db.exec('alter table itineraries add column trashed_at text');
       this.db.exec(
         'create index if not exists itineraries_owner on itineraries(owner_id)'
       );

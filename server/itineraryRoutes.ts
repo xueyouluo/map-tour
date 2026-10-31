@@ -32,12 +32,25 @@ export function itineraryRouter(store: ItineraryStore) {
       res.json({
         items: await store.listSummaries(
           Number(req.query.limit) || 100,
-          access(req)
+          access(req),
+          req.query.trashed === 'true'
         )
       });
     } catch (error) {
       next(error);
     }
+  });
+  router.delete<{ id: string }>('/:id', requireUser, sameOriginMutation, async (req, res, next) => {
+    try {
+      await store.setTrashed(req.params.id, true, access(req));
+      res.sendStatus(204);
+    } catch (error) { next(error); }
+  });
+  router.post<{ id: string }>('/:id/restore', requireUser, sameOriginMutation, async (req, res, next) => {
+    try {
+      await store.setTrashed(req.params.id, false, access(req));
+      res.sendStatus(204);
+    } catch (error) { next(error); }
   });
   router.get('/:id', async (req, res, next) => {
     try {

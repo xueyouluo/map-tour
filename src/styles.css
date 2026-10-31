@@ -822,12 +822,96 @@ textarea:focus {
   display: block;
   border: 1px solid #dce3ee;
   border-radius: 8px;
-  padding: 16px 48px 16px 18px;
+  padding: 0;
   background: #ffffff;
   color: inherit;
   text-decoration: none;
   box-shadow: 0 8px 22px rgba(24, 33, 53, 0.06);
 }
+
+.history-card-link {
+  position: relative;
+  display: block;
+  padding: 18px 48px 18px 18px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.history-card-link:focus-visible,
+.history-record-action:focus-visible,
+.history-scope:focus-visible {
+  outline: 3px solid #91b4f0;
+  outline-offset: 3px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.history-toolbar > span {
+  margin-left: auto;
+  color: #667892;
+  font-size: 13px;
+}
+
+.history-scope,
+.history-record-action {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid #dce3ee;
+  border-radius: 9px;
+  background: #fff;
+  color: #49617e;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.history-scope[aria-pressed='true'] {
+  border-color: #bdcfee;
+  background: #e8effd;
+  color: #315c9a;
+}
+
+.history-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px 8px 18px;
+  border-top: 1px solid #edf0f6;
+}
+
+.history-card-actions > span {
+  color: #7a8798;
+  font-size: 12px;
+}
+
+.history-record-action.danger {
+  border-color: #edd9d9;
+  background: #fffafa;
+  color: #a44747;
+}
+
+.history-record-action:hover:not(:disabled) { background: #edf3fc; }
+.history-record-action.danger:hover:not(:disabled) { background: #fbeaea; }
+.history-record-action:disabled,
+.history-scope:disabled { opacity: 0.55; cursor: wait; }
+.history-notice,
+.history-action-error { margin: 0 0 16px; padding: 12px 15px; border-radius: 9px; font-size: 14px; line-height: 1.6; }
+.history-notice { background: #e5edf9; color: #345d91; }
+.history-action-error { background: #fff0f0; color: #a44747; }
+.history-delete-dialog { padding: 20px 26px 24px; }
+.history-delete-dialog > p { margin: 0 0 14px; color: #4f617a; line-height: 1.7; overflow-wrap: anywhere; }
+.history-dialog-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 24px; }
 
 .history-card:hover {
   border-color: #b9c8ea;
@@ -1214,8 +1298,10 @@ textarea:focus {
   }
 
   .history-card {
-    padding: 13px 42px 13px 14px;
+    padding: 0;
   }
+
+  .history-card-link { padding: 13px 42px 13px 14px; }
 
   .history-card h2 {
     margin-top: 8px;
