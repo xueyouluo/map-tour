@@ -50,6 +50,13 @@ const definitions: Omit<SettingField, 'value' | 'configured'>[] = [
     choices: ['true', 'false']
   },
   {
+    key: 'VIDEO_MUSIC_CDN_URL',
+    label: '音乐 CDN 地址（可选）',
+    secret: false,
+    group: 'video',
+    placeholder: 'https://cdn.example.com/map-tour/music/'
+  },
+  {
     key: 'USER_REGISTRATION_ENABLED',
     label: '允许新用户注册',
     secret: false,
@@ -122,6 +129,12 @@ export class SettingsStore {
       const value = raw.trim();
       if (value && field.choices && !field.choices.includes(value))
         throw new Error(`${field.label}的值不正确。`);
+      if (value && key === 'VIDEO_MUSIC_CDN_URL') {
+        let url: URL;
+        try { url = new URL(value); } catch { throw new Error('音乐 CDN 地址需要完整的 HTTPS 目录。'); }
+        if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash)
+          throw new Error('音乐 CDN 地址需要是不含认证信息、查询参数的 HTTPS 目录。');
+      }
       if (value && key.endsWith('_BASE_URL')) {
         let url: URL;
         try {

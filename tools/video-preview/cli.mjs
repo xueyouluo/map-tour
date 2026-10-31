@@ -189,6 +189,7 @@ async function main() {
     }
     for (const file of [
       'film.js',
+      'playback.js',
       'film.html',
       'vehicles.js',
       'attribution.png'

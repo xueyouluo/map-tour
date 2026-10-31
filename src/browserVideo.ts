@@ -1,4 +1,7 @@
+import { musicGainAt } from './shared/musicEnvelope';
+import { browserMusicSource } from './browserMusic';
 import type { VideoJob } from './shared/videoExport';
+import { BrowserExportError, yieldBrowserWork } from './shared/browserExport';
 
 export interface JourneySceneWindow extends Window {
   sampleReady?: boolean;
@@ -10,7 +13,9 @@ export interface JourneySceneWindow extends Window {
     play(): void;
     getTime(): number;
     isPlaying(): boolean;
-    prepareExport?(): Promise<void>;
+    prepareExport?(progress?: (text: string) => void): Promise<void>;
+    getAudioBlob?(): Blob | undefined;
+    finishExport?(): void;
     duration: number;
   };
 }
@@ -100,25 +105,62 @@ export async function renderBrowserVideo(
   let audio: InstanceType<typeof AudioBufferSource> | undefined;
   let buffer: AudioBuffer | undefined;
   let cover: Blob | null = null;
-  const cancel = () => {
-    void output.cancel().catch(() => {});
-  };
+  let stage = '准备高清地图';
+  let cancellation: Promise<unknown> | undefined;
+  const cancel = () => (cancellation ||= output.cancel().catch(() => {}));
   signal.addEventListener('abort', cancel, { once: true });
   try {
-    if (api.prepareExport) await abortable(api.prepareExport(), signal);
+    progress(0, stage);
+    if (api.prepareExport) await abortable(api.prepareExport((text) => progress(0, text)), signal);
     if (job.options.music !== 'none') {
-      progress(1, '准备配乐');
-      const response = await fetch(
-        new URL('music.wav', new URL(job.sceneUrl!, location.origin)),
-        { signal }
+      stage = '下载配乐';
+      progress(1, stage);
+      const localAudio = api.getAudioBlob?.() || await browserMusicSource(
+        job.options, job.duration, `/api/video/jobs/${job.id}/audio-source`,
+        (text) => progress(1, text), signal
+      );
+      const response = localAudio ? new Response(localAudio) : await fetch(
+        new URL(`/api/video/jobs/${job.id}/audio`, location.origin), { signal }
       );
       if (!response.ok) throw new Error('配乐加载失败');
+      const total = Number(response.headers.get('content-length'));
+      let audioBytes: ArrayBuffer;
+      if (response.body) {
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+        let reported = 0;
+        try {
+          while (true) {
+            const { done, value } = await abortable(reader.read(), signal);
+            if (done) break;
+            abortCheck(signal);
+            chunks.push(value);
+            received += value.byteLength;
+            if (performance.now() - reported > 200 || received === total) {
+              reported = performance.now();
+              progress(1, total > 0
+                ? `下载配乐 ${Math.min(100, Math.round(received * 100 / total))}%`
+                : `下载配乐 ${(received / 1048576).toFixed(1)} MB`);
+            }
+          }
+        } finally { reader.releaseLock(); }
+        const bytes = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        audioBytes = bytes.buffer;
+      } else audioBytes = await response.arrayBuffer();
+      stage = '解码配乐';
+      progress(2, stage);
       const decoder = new AudioContext({ sampleRate: 48000 });
       try {
-        buffer = await abortable(
-          decoder.decodeAudioData(await response.arrayBuffer()),
-          signal
-        );
+        const decoded = await abortable(decoder.decodeAudioData(audioBytes), signal);
+        if (decoded.duration + 0.05 < job.duration) throw new Error('配乐短于视频，请选择其他音乐。');
+        buffer = decoder.createBuffer(decoded.numberOfChannels, Math.round(job.duration * decoded.sampleRate), decoded.sampleRate);
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+          const input = decoded.getChannelData(channel), result = buffer.getChannelData(channel);
+          for (let i = 0; i < result.length; i++) result[i] = (input[i] || 0) * musicGainAt(i / buffer.sampleRate, job.duration);
+        }
       } finally {
         await decoder.close();
       }
@@ -128,6 +170,8 @@ export async function renderBrowserVideo(
     abortCheck(signal);
     await output.start();
     if (audio && buffer) {
+      stage = '编码配乐';
+      progress(2, stage);
       await abortable(audio.add(buffer), signal);
       audio.close();
       buffer = undefined;
@@ -136,81 +180,90 @@ export async function renderBrowserVideo(
     for (let frame = 0; frame < frames; frame++) {
       abortCheck(signal);
       if (scene.sceneError) throw new Error(scene.sceneError);
+      stage = `渲染第 ${frame + 1}/${frames} 帧`;
       await abortable(api.seekAsync(frame / 30), signal);
-      context.drawImage(original, 0, 0);
+      context.drawImage(original, 0, 0, canvas.width, canvas.height);
       if (frame === Math.min(90, frames - 1))
         cover = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob(resolve, 'image/jpeg', 0.85)
         );
+      stage = `编码第 ${frame + 1}/${frames} 帧`;
       await abortable(video.add(frame / 30, 1 / 30), signal);
       if (frame % 5 === 0) {
         progress(3 + (92 * frame) / frames, '正在本机生成视频');
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await yieldBrowserWork();
       }
     }
     abortCheck(signal);
     video.close();
+    stage = '整理 MP4 文件';
     progress(97, '整理 MP4 文件');
     await abortable(output.finalize(), signal);
     const bytes = output.target.buffer;
     if (!bytes?.byteLength || !cover) throw new Error('视频编码未完成');
     const blob = new Blob([bytes], { type: 'video/mp4' });
-    progress(99, '检查视频播放');
-    await verifyBrowserVideo(blob, job.duration, signal);
+    stage = '检查成片文件';
+    progress(99, stage);
+    await verifyBrowserVideo(blob, job.duration, job.options.music !== 'none', signal);
     return { blob, cover };
   } catch (error) {
-    await output.cancel().catch(() => {});
-    throw error;
+    await cancel();
+    if (signal.aborted) throw signal.reason;
+    throw new BrowserExportError(stage, error);
   } finally {
     signal.removeEventListener('abort', cancel);
     canvas.width = canvas.height = 1;
+    api.finishExport?.();
   }
 }
 
 async function verifyBrowserVideo(
   blob: Blob,
   duration: number,
+  withMusic: boolean,
   signal: AbortSignal
 ) {
-  const video = document.createElement('video');
-  const url = URL.createObjectURL(blob);
-  video.src = url;
-  video.muted = true;
-  video.playsInline = true;
+  const { Input, BlobSource, MP4, VideoSampleSink, AudioSampleSink } =
+    await import('mediabunny');
+  const input = new Input({ source: new BlobSource(blob), formats: [MP4] });
+  let timer: ReturnType<typeof setTimeout>;
+  const check = async () => {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error('成片缺少视频轨道');
+    const [actualDuration, width, height, codec] = await Promise.all([
+      input.computeDuration(), track.getDisplayWidth(),
+      track.getDisplayHeight(), track.getCodec()
+    ]);
+    if (Math.abs(actualDuration - duration) >= 0.2 ||
+      width !== 1080 || height !== 1920 || codec !== 'avc')
+      throw new Error('成片的时长、分辨率或格式不正确');
+    // WebCodecs sampling works in background tabs; an HTMLVideoElement may
+    // suspend its seek/decode events there and falsely reject a valid MP4.
+    const sink = new VideoSampleSink(track);
+    for (const time of [Math.min(1, duration / 2), Math.max(0, duration - 0.1)]) {
+      const sample = await sink.getSample(time);
+      if (!sample) throw new Error('成片画面无法解码');
+      sample.close();
+    }
+    if (withMusic) {
+      const audio = await input.getPrimaryAudioTrack();
+      if (!audio || await audio.getCodec() !== 'aac')
+        throw new Error('成片缺少 AAC 配乐轨道');
+      const sample = await new AudioSampleSink(audio).getSample(Math.min(1, duration / 2));
+      if (!sample) throw new Error('成片配乐无法解码');
+      sample.close();
+    }
+  };
   try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => done(new Error('视频播放检查超时')),
-        15000
-      );
-      const aborted = () =>
-        done(signal.reason || new DOMException('已取消', 'AbortError'));
-      const done = (error?: unknown) => {
-        clearTimeout(timer);
-        signal.removeEventListener('abort', aborted);
-        video.onloadedmetadata = video.onseeked = video.onerror = null;
-        error ? reject(error) : resolve();
-      };
-      video.onloadedmetadata = () => {
-        if (
-          Math.abs(video.duration - duration) >= 0.2 ||
-          video.videoWidth !== 1080 ||
-          video.videoHeight !== 1920
-        )
-          done(new Error('视频格式检查失败'));
-        else video.currentTime = Math.min(1, duration / 2);
-      };
-      video.onseeked = () =>
-        video.readyState >= 2 ? done() : done(new Error('视频解码检查失败'));
-      video.onerror = () => done(new Error('浏览器无法播放生成的视频'));
-      signal.addEventListener('abort', aborted, { once: true });
-      if (signal.aborted) aborted();
-      video.load();
-    });
+    await abortable(Promise.race([
+      check(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('成片解码检查超时')), 20000);
+      })
+    ]), signal);
   } finally {
-    video.removeAttribute('src');
-    video.load();
-    URL.revokeObjectURL(url);
+    clearTimeout(timer!);
+    input.dispose();
   }
 }
 

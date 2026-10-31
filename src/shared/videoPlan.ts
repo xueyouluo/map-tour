@@ -1,3 +1,4 @@
+import { unmatchedRouteStops } from './stopLocations';
 import { arrivalForLeg } from './transport';
 import { distanceMeters } from './geo';
 import {
@@ -202,11 +203,7 @@ export function createVideoPlan(
     throw new Error('主路线地点 ID 重复。');
   if (new Set(routeDays.map((day) => day.dayIndex)).size !== routeDays.length)
     throw new Error('行程天数编号重复。');
-  const unmatched = mainStops.filter(
-    (stop) =>
-      stop.poiMatch?.status !== 'matched' ||
-      !validCoordinate(stop.poiMatch.location)
-  );
+  const unmatched = unmatchedRouteStops(itinerary);
   if (unmatched.length)
     throw new Error(
       `以下地点尚未匹配坐标，请先在地图中完成匹配：${unmatched.map((s) => s.name).join('、')}`

@@ -16,11 +16,13 @@ export interface VideoExportOptions {
   music: VideoMusicKind;
   uploadId?: string;
   trackId?: string;
+  localMusic?: { name: string; duration: number };
 }
 
 export interface VideoJob {
   journeySignature?: string;
   kind?: 'scene';
+  browserAssets?: boolean;
   sceneUrl?: string;
   id: string;
   itineraryId: string;
@@ -47,6 +49,7 @@ export interface VideoJob {
 
 export interface VideoCapabilities {
   available: boolean;
+  backgroundAvailable?: boolean;
   reason?: string;
   maxUploadBytes: number;
   retentionDays: number;

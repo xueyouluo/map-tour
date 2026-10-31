@@ -288,29 +288,7 @@ it('prepares private reusable browser scenes and falls back using the immutable 
   let runs = 0;
   const manager = new VideoJobs(directory, async (job) => {
     runs++;
-    if (job.kind !== 'scene') {
-      complete(directory, job.id, job.duration);
-      return;
-    }
-    const render = path.join(directory, 'jobs', job.id, 'render');
-    fs.mkdirSync(render);
-    for (const file of [
-      'film.html',
-      'film.js',
-      'vehicles.js',
-      'plan.json',
-      'terrain-data.json',
-      'detail-plan.json'
-    ])
-      fs.writeFileSync(path.join(render, file), '{}');
-    fs.writeFileSync(
-      path.join(render, 'manifest.json'),
-      JSON.stringify({ status: 'prepared' })
-    );
-    fs.writeFileSync(
-      path.join(render, 'assets-check.json'),
-      JSON.stringify({ patches: 1, checks: [{}] })
-    );
+    complete(directory, job.id, job.duration);
   });
   managers.push(manager);
   const trip = source();
@@ -324,7 +302,11 @@ it('prepares private reusable browser scenes and falls back using the immutable 
   expect(manager.create('alice', trip, { music: 'none' }, 'scene').id).toBe(
     scene.id
   );
-  expect(runs).toBe(1);
+  expect(runs).toBe(0);
+  expect(ready.browserAssets).toBe(true);
+  const files = fs.readdirSync(path.join(directory, 'jobs', scene.id, 'render'));
+  expect(files).not.toContain('terrain-data.json');
+  expect(files).not.toContain('detail-tiles');
   expect(manager.sceneFile('alice', scene.id, 'plan.json')).toContain(
     'plan.json'
   );
@@ -353,22 +335,23 @@ it('prepares private reusable browser scenes and falls back using the immutable 
   expect(manager.get('alice', fallback.id).videoUrl).toBeTruthy();
 });
 
-it('never reports an incomplete scene as ready and retries scene preparation as a scene', async () => {
+it('rebuilds missing browser plans without invoking the heavy renderer and validates local music only for scenes', async () => {
   const directory = root();
-  const manager = new VideoJobs(directory, async (job) => {
-    const render = path.join(directory, 'jobs', job.id, 'render');
-    fs.mkdirSync(render);
-    fs.writeFileSync(
-      path.join(render, 'manifest.json'),
-      JSON.stringify({ status: 'prepared' })
-    );
-    fs.writeFileSync(path.join(render, 'assets-check.json'), '{}');
-  });
+  let runs = 0;
+  const manager = new VideoJobs(directory, async () => { runs++; });
   managers.push(manager);
-  const scene = manager.create('alice', source(), { music: 'none' }, 'scene');
-  await vi.waitFor(() =>
-    expect(manager.get('alice', scene.id).state).toBe('failed')
-  );
-  expect(manager.get('alice', scene.id).sceneUrl).toBeUndefined();
-  expect(manager.retry('alice', scene.id).kind).toBe('scene');
+  const options = { music: 'none' };
+  const scene = manager.create('alice', source(), options, 'scene');
+  fs.unlinkSync(manager.sceneFile('alice', scene.id, 'plan.json'));
+  const replacement = manager.create('alice', source(), options, 'scene');
+  expect(replacement.id).not.toBe(scene.id);
+  expect(replacement.state).toBe('completed');
+  expect(runs).toBe(0);
+  const local = { music: 'upload', uploadId: '00000000-0000-4000-8000-000000000000', localMusic: { name: 'My music.mp3', duration: 200 } };
+  const musicScene = manager.create('alice', source(), local, 'scene');
+  expect(musicScene.options.localMusic?.name).toBe('My music.mp3');
+  expect(() => manager.create('alice', source(), local)).toThrow('本地音乐信息无效');
+  expect(() => manager.fallback('alice', musicScene.id)).toThrow('先上传');
+  expect(() => manager.sceneAudio('bob', musicScene.id)).toThrow('没有找到');
+  expect(() => parseExportOptions({ ...local, localMusic: { name: 'bad', duration: Infinity } }, true)).toThrow('本地音乐信息无效');
 });

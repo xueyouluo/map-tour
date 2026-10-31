@@ -79,3 +79,49 @@ it('adds only the selected day and preserves a map candidate after removal', () 
     )
   ).toBe(true);
 });
+
+it('filters global and previously saved recommendations to the selected day cities', () => {
+  const source = normalizeParsedItinerary({
+    days: [
+      { dayIndex: 1, stops: [{ name: '黄鹤楼', province: '湖北省', city: '武汉市' }] },
+      { dayIndex: 2, stops: [{ name: '橘子洲', province: '湖南省', city: '长沙' }] },
+      { dayIndex: 3, stops: [{ name: '武汉站', city: '武汉' }, { name: '长沙南站', city: '长沙市' }] }
+    ],
+    recommendations: {
+      dining: [{ name: '武汉小馆', city: '武汉' }, { name: '长沙湘菜馆', city: '长沙市' }],
+      lodging: [{ name: '武汉酒店', city: '武汉' }, { name: '长沙酒店', city: '长沙' }]
+    }
+  }, 'multi-city-options');
+  // Simulate an older saved itinerary containing every city's matched options on day 1.
+  const changsha = getDayActivityOptions(source.days[1], source.recommendations);
+  source.days[0].activityOptions = changsha.map(option => ({
+    ...option, dayIndex: 1, poiMatch: { status: 'matched', name: option.name, city: '长沙市', location: [112.97, 28.19] }
+  }));
+  const before = structuredClone(source);
+  expect(getMapOnlyActivities(source, 1).map(p => p.stop.name)).toEqual(['武汉小馆', '武汉酒店']);
+  expect(getMapOnlyActivities(source, 2).map(p => p.stop.name)).toEqual(['长沙湘菜馆', '长沙酒店']);
+  expect(getMapOnlyActivities(source, 3)).toHaveLength(4);
+  expect(new Set(getMapOnlyActivities(source, 'all').map(p => p.stop.name)).size).toBe(4);
+  expect(source).toEqual(before);
+});
+
+it('uses resolved POI cities for legacy candidates and keeps explicitly included stops', () => {
+  const source = fixture();
+  source.days[0].stops[0].poiMatch = { status: 'matched', name: '公园', city: '杭州市', location: [120.15, 30.25] };
+  source.days[0].stops[0].city = undefined;
+  const option = getDayActivityOptions(source.days[1], source.recommendations)[0];
+  source.days[0].activityOptions = [{ ...option, city: undefined,
+    poiMatch: { status: 'matched', name: option.name, city: '长沙市', location: [112.97, 28.19] }
+  }];
+  expect(getDayActivityOptions(source.days[0], source.recommendations).every(p => p.city === '杭州' || p.city === '杭州市')).toBe(true);
+  const included = { ...option, id: 'included-meal', city: '杭州', dayIndex: 1 };
+  source.days[0].stops.push(included);
+  expect(getDayActivityOptions(source.days[0], source.recommendations).some(p => p.id === included.id)).toBe(true);
+});
+
+it('accepts county-level recommendation city names belonging to the day', () => {
+  const trip = normalizeParsedItinerary({ days: [{ stops: [{ name: '海边', city: '福州市', district: '平潭县' }] }],
+    recommendations: { dining: [{ name: '海鲜店', city: '平潭' }], lodging: [] }
+  }, 'county-options');
+  expect(getMapOnlyActivities(trip, 1).map(p => p.stop.name)).toEqual(['海鲜店']);
+});

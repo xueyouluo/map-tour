@@ -35,6 +35,8 @@ it('persists validated overrides privately, retains untouched secrets and respec
     expect(env.OPENAI_MODEL).toBe('new');
     expect(fs.readFileSync(file + '.lock', 'utf8')).toBe('other task');
     fs.unlinkSync(file + '.lock');
+    store.save({ VIDEO_MUSIC_CDN_URL: 'https://cdn.example.com/music/' });
+    expect(store.fields().find(field => field.key === 'VIDEO_MUSIC_CDN_URL')?.value).toBe('https://cdn.example.com/music/');
     store.save({ OPENAI_API_KEY: '' });
     expect(env.OPENAI_API_KEY).toBe('');
     for (const invalid of [
@@ -43,7 +45,9 @@ it('persists validated overrides privately, retains untouched secrets and respec
       { OPENAI_BASE_URL: 'https://user:pass@example.com/v1' },
       { AMAP_MAP_STYLE_ID: 'oops' },
       { OPENAI_MODEL: 'x\ny' },
-      { VIDEO_EXPORT_ENABLED: 'yes' }
+      { VIDEO_EXPORT_ENABLED: 'yes' },
+      { VIDEO_MUSIC_CDN_URL: 'http://cdn.example.com/music/' },
+      { VIDEO_MUSIC_CDN_URL: 'https://user:pass@cdn.example.com' }
     ]) {
       expect(() => store.save(invalid)).toThrow();
     }

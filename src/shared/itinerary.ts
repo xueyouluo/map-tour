@@ -57,6 +57,7 @@ export interface PoiCandidate {
 }
 
 export interface PoiMatch extends PoiCandidate {
+  source?: 'manual';
   matchVersion?: 2;
   searchContext?: PoiSearchContext;
   status: MatchStatus;

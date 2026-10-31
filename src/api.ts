@@ -1,4 +1,5 @@
 import type { Itinerary, ItinerarySummary } from './shared/itinerary';
+import { prepareImportImage } from './browserImportImage';
 
 export interface RuntimeConfig {
   amapKey: string;
@@ -31,7 +32,7 @@ export async function parseItinerary(
 ): Promise<ParseResponse> {
   const formData = new FormData();
   formData.set('text', text);
-  if (image) formData.set('image', image);
+  if (image) formData.set('image', await prepareImportImage(image));
 
   const response = await fetch('/api/parse', {
     method: 'POST',
@@ -47,7 +48,10 @@ export async function parseItineraryStream(
 ): Promise<ParseResponse> {
   const formData = new FormData();
   formData.set('text', text);
-  if (image) formData.set('image', image);
+  if (image) {
+    onEvent({ type: 'status', message: '正在本机优化截图，保留原始文字分辨率…' });
+    formData.set('image', await prepareImportImage(image));
+  }
 
   const response = await fetch('/api/parse/stream', {
     method: 'POST',

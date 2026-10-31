@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { afterEach, expect, it } from 'vitest';
-import { MusicLibrary } from './musicLibrary';
+import { afterEach, expect, it, vi } from 'vitest';
+import { MusicLibrary, musicCdnUrl } from './musicLibrary';
 
 const roots: string[] = [];
 function fixture() {
@@ -33,8 +33,23 @@ function fixture() {
   return { root, track, save, library: new MusicLibrary(root) };
 }
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true });
+});
+
+it('reuses verified immutable audio without rereading it on each request and detects replacements', () => {
+  const { library, root, track } = fixture();
+  const file = path.join(root, track.file);
+  const read = vi.spyOn(fs, 'readFileSync');
+  library.get(track.id);
+  library.get(track.id);
+  expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(1);
+  const replacement = file + '.tmp';
+  fs.writeFileSync(replacement, Buffer.alloc(fs.statSync(file).size));
+  fs.renameSync(replacement, file);
+  expect(() => library.get(track.id)).toThrow('校验失败');
 });
 
 it('publishes only playback metadata and verifies the exact audio bytes', () => {
@@ -77,4 +92,15 @@ it('supports an empty installation and omits unavailable files', () => {
   expect(library.get(track.id)).toBeNull();
   fs.unlinkSync(path.join(root, 'catalog.json'));
   expect(library.list()).toEqual([]);
+});
+
+it('uses a configured HTTPS CDN directory directly and rejects unsafe configuration', () => {
+  const { library, track } = fixture();
+  vi.stubEnv('VIDEO_MUSIC_CDN_URL', 'https://cdn.example.com/map-tour/music');
+  expect(library.list()[0].previewUrl).toBe('https://cdn.example.com/map-tour/music/' + track.previewFile);
+  expect(library.get(track.id)?.audioUrl).toBe('https://cdn.example.com/map-tour/music/' + track.file);
+  for (const value of ['http://cdn.example.com', 'https://user:password@cdn.example.com', 'https://cdn.example.com/?token=private']) {
+    vi.stubEnv('VIDEO_MUSIC_CDN_URL', value);
+    expect(() => musicCdnUrl(track.file)).toThrow('HTTPS 目录');
+  }
 });

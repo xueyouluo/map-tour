@@ -1,5 +1,9 @@
+import { localMusicDuration, saveBrowserMusic, readBrowserMusic } from './browserMusic';
+import { unmatchedRouteStops } from './shared/stopLocations';
+import './stopLocationEditor.css';
 import { useAuth } from './Auth';
 import { journeySignature } from './shared/journeySignature';
+import { createExportWatchdog } from './shared/browserExport';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -74,6 +78,7 @@ export function VideoExport({
   focusStopId = null,
   exportRequest = 0,
   onEncodingChange,
+  onEditStop,
   visible = true
 }: {
   itinerary: Itinerary;
@@ -84,9 +89,14 @@ export function VideoExport({
   focusStopId?: string | null;
   exportRequest?: number;
   onEncodingChange?: (encoding: boolean) => void;
+  onEditStop?: (stopId: string) => void;
   visible?: boolean;
 }) {
   const { session, openAuth } = useAuth();
+  const unmatchedStops = useMemo(
+    () => unmatchedRouteStops(itinerary),
+    [itinerary]
+  );
   const signature = useMemo(() => journeySignature(itinerary), [itinerary]);
   const [open, setOpen] = useState(embedded);
   const [preparedPlan, setPreparedPlan] = useState<VideoPlan | null>(null);
@@ -112,6 +122,10 @@ export function VideoExport({
   const [encoding, setEncoding] = useState(false);
   const [encodeProgress, setEncodeProgress] = useState({ value: 0, text: '' });
   const [sceneReady, setSceneReady] = useState(false);
+  const [sceneLoadError, setSceneLoadError] = useState('');
+  const [sceneProgress, setSceneProgress] = useState('加载立体地图');
+  const [sceneReload, setSceneReload] = useState(0);
+  const [exportFailure, setExportFailure] = useState('');
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -119,6 +133,7 @@ export function VideoExport({
   const input = useRef<HTMLInputElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const controller = useRef<AbortController>();
+  const exportWatchdog = useRef<ReturnType<typeof createExportWatchdog>>();
   const fallbackLock = useRef(false);
   const handedOff = useRef(false);
   const initialized = useRef(false);
@@ -137,7 +152,7 @@ export function VideoExport({
     durationSeconds: duration === 'auto' ? undefined : Number(duration),
     music,
     ...(music === 'library' ? { trackId } : {}),
-    ...(music === 'upload' ? { uploadId: upload?.id } : {})
+    ...(music === 'upload' ? { uploadId: upload?.id, localMusic: upload ? { name: upload.name, duration: upload.duration } : undefined } : {})
   };
   const summary = useMemo(() => {
     try {
@@ -364,7 +379,8 @@ export function VideoExport({
         thumbnail.height = 220;
         thumbnail
           .getContext('2d')
-          ?.drawImage(original, 0, 400, original.width, 1100, 0, 0, 320, 220);
+          ?.drawImage(original, 0, original.height * (400 / 1920),
+            original.width, original.height * (1100 / 1920), 0, 0, 320, 220);
         setPreviewBackdrop(thumbnail.toDataURL('image/jpeg', 0.65));
       })
       .catch(() => {});
@@ -381,8 +397,9 @@ export function VideoExport({
       event.returnValue = '';
     };
     const hidden = () => {
-      if (document.hidden)
-        controller.current?.abort(new Error('页面进入后台，转为后台制作'));
+      exportWatchdog.current?.touch();
+      if (document.hidden) setNotice('正在后台继续本机导出，返回此标签页可加快速度。');
+      else setNotice((current) => current === '正在后台继续本机导出，返回此标签页可加快速度。' ? '' : current);
     };
     window.addEventListener('beforeunload', beforeUnload);
     document.addEventListener('visibilitychange', hidden);
@@ -393,16 +410,28 @@ export function VideoExport({
   }, [encoding]);
   useEffect(() => {
     setSceneReady(false);
+    setSceneLoadError('');
+    setSceneProgress('加载立体地图');
+    setExportFailure('');
     setPlaying(false);
     setTime(0);
     if (!scene || !open) return;
-    const started = Date.now();
+    let lastProgressAt = Date.now();
+    let lastProgress = '';
     let hasLoaded = false;
     const timer = setInterval(() => {
-      const child = frame.current?.contentWindow as JourneySceneWindow | null;
-      if (child?.sceneError || (!hasLoaded && Date.now() - started > 120000)) {
+      const child = frame.current?.contentWindow as (JourneySceneWindow & { sceneProgress?: string }) | null;
+      if (child?.sceneProgress) {
+        setSceneProgress(child.sceneProgress);
+        if (child.sceneProgress !== lastProgress) {
+          lastProgress = child.sceneProgress;
+          lastProgressAt = Date.now();
+        }
+      }
+      if (child?.sceneError || (!hasLoaded && Date.now() - lastProgressAt > 120000)) {
         clearInterval(timer);
-        void fallback(scene, '当前设备未能加载预览，已转入后台制作。');
+        setSceneReady(false);
+        setSceneLoadError(child?.sceneError || '预览加载超时，请重新加载预览；也可以手动使用后台制作。');
       } else if (child?.sampleReady && child.__video) {
         hasLoaded = true;
         setSceneReady(true);
@@ -411,7 +440,7 @@ export function VideoExport({
       }
     }, 300);
     return () => clearInterval(timer);
-  }, [scene?.id, open]);
+  }, [scene?.id, open, sceneReload]);
 
   function remember(job: VideoJob) {
     setJobs((current) => [job, ...current.filter((j) => j.id !== job.id)]);
@@ -428,7 +457,13 @@ export function VideoExport({
     setError('');
     setNotice(message);
     try {
-      remember((await fallbackVideoJob(job.id)).job);
+      let uploadId: string | undefined;
+      if (job.options.localMusic) {
+        setNotice('正在上传音乐，上传完成后开始后台制作。');
+        const file = await readBrowserMusic(job.options.uploadId!);
+        uploadId = (await uploadVideoMusic(file)).upload.id;
+      }
+      remember((await fallbackVideoJob(job.id, uploadId)).job);
     } catch (issue) {
       setError(
         issue instanceof Error ? issue.message : '后台制作暂不可用，请重试。'
@@ -448,15 +483,18 @@ export function VideoExport({
     setError('');
     setNotice('');
     try {
-      const supported =
-        !background && (await browserVideoSupport(music !== 'none'));
-      if (!supported && !background)
-        setNotice('当前浏览器不支持这次高清导出，已自动转入后台制作。');
       remember(
         (
-          await (supported
-            ? createVideoScene(itinerary, options)
-            : createVideoJob(itinerary, options))
+          await (async () => {
+            if (!background) return createVideoScene(itinerary, options);
+            if (options.localMusic) {
+              const file = await readBrowserMusic(options.uploadId!);
+              const uploaded = await uploadVideoMusic(file);
+              const { localMusic: _local, ...remote } = options;
+              return createVideoJob(itinerary, { ...remote, uploadId: uploaded.upload.id });
+            }
+            return createVideoJob(itinerary, options);
+          })()
         ).job
       );
     } catch (issue) {
@@ -476,23 +514,24 @@ export function VideoExport({
     setEncoding(true);
     setError('');
     setNotice('');
+    setExportFailure('');
     setPlaying(false);
     setEncodeProgress({ value: 0, text: '准备本机导出' });
-    let watchdog: ReturnType<typeof setTimeout>;
-    const resetWatchdog = () => {
-      clearTimeout(watchdog);
-      watchdog = setTimeout(() => task.abort(new Error('本机导出超时')), 60000);
-    };
-    resetWatchdog();
+    const watchdog = createExportWatchdog(
+      () => task.abort(new Error('本机导出长时间没有进展，请检查网络后重试。')),
+      () => document.hidden
+    );
+    exportWatchdog.current = watchdog;
+    watchdog.touch();
     try {
       if (!(await browserVideoSupport(scene.options.music !== 'none')))
-        throw new Error('设备编码不可用');
+        throw new Error('当前浏览器不支持此次高清编码，可以换用 Chrome，或手动使用后台制作。');
       const media = await renderBrowserVideo(
         child,
         scene,
         task.signal,
         (value, text) => {
-          resetWatchdog();
+          watchdog.touch();
           setEncodeProgress({ value, text });
         }
       );
@@ -518,15 +557,21 @@ export function VideoExport({
       setSelectedId(null);
       setEncodeProgress({ value: 100, text: '制作完成' });
     } catch (issue) {
-      if (!(issue instanceof DOMException && issue.name === 'AbortError'))
-        await fallback(
-          scene,
-          '本机导出没有完成，已自动转入后台制作。行程、时长和配乐保持一致。'
-        );
+      if (!(issue instanceof DOMException && issue.name === 'AbortError')) {
+        const message = issue instanceof Error ? issue.message : '本机导出失败，请重试。';
+        setExportFailure(message);
+        try {
+          sessionStorage.setItem('map-tour:last-export-failure', JSON.stringify({
+            sceneId: scene.id, message, at: new Date().toISOString()
+          }));
+        } catch { /* The error remains visible if session storage is unavailable. */ }
+      }
       else if (!handedOff.current)
         setNotice('已取消本机导出，可以继续预览或重新导出。');
     } finally {
-      clearTimeout(watchdog!);
+      watchdog.stop();
+      exportWatchdog.current = undefined;
+      setNotice((current) => current === '正在后台继续本机导出，返回此标签页可加快速度。' ? '' : current);
       setEncoding(false);
       controller.current = undefined;
     }
@@ -569,7 +614,10 @@ export function VideoExport({
     }
     setUploading(true);
     try {
-      setUpload((await uploadVideoMusic(file)).upload);
+      const duration = await localMusicDuration(file);
+      const id = crypto.randomUUID();
+      await saveBrowserMusic(id, file);
+      setUpload({ id, name: file.name, duration, bytes: file.size });
     } catch (issue) {
       setError(
         issue instanceof Error ? issue.message : '音乐读取失败，请重新选择。'
@@ -709,7 +757,7 @@ export function VideoExport({
                       />
                     ) : scene ? (
                       <iframe
-                        key={scene.id}
+                        key={`${scene.id}-${sceneReload}`}
                         ref={frame}
                         src={scene.sceneUrl}
                         title="实时旅程预览"
@@ -737,7 +785,7 @@ export function VideoExport({
                         </div>
                       </>
                     )}
-                    {(inProgress || encoding || (scene && !sceneReady)) && (
+                    {(inProgress || encoding || (scene && !sceneReady && !sceneLoadError)) && (
                       <div
                         className="video-progress-overlay"
                         role="status"
@@ -748,7 +796,7 @@ export function VideoExport({
                           {encoding
                             ? encodeProgress.text
                             : scene
-                              ? '加载立体地图'
+                              ? sceneProgress
                               : selected?.stage}
                         </strong>
                         <span>
@@ -768,7 +816,7 @@ export function VideoExport({
                         </div>
                         <small>
                           {encoding
-                            ? '请保持页面打开，切到后台将自动转为后台制作'
+                            ? '请保持页面打开，可以切换标签页；失败后可在本机重试'
                             : '地图素材准备好后，即可在这里播放'}
                         </small>
                       </div>
@@ -831,7 +879,7 @@ export function VideoExport({
                         disabled={!sceneReady || encoding || busy}
                         onClick={encode}
                       >
-                        {encoding ? `${Math.round(progress)}%` : '导出视频'}
+                        {encoding ? `${Math.round(progress)}%` : exportFailure ? '重试本机导出' : '导出视频'}
                       </button>
                     </div>
                   )}
@@ -857,18 +905,14 @@ export function VideoExport({
                     </span>
                     <span>
                       <Footprints size={15} />
-                      {selected?.stops ?? summary.plan?.stops.length ?? 0}{' '}
+                      {selected?.stops ?? itinerary.days.reduce((count, day) => count + day.stops.length, 0)}{' '}
                       个地点
                     </span>
                     <span>
-                      <Clock3 size={15} />约{' '}
-                      {Math.round(
-                        local?.duration ||
-                          selected?.duration ||
-                          summary.plan?.duration ||
-                          0
-                      )}{' '}
-                      秒
+                      <Clock3 size={15} />
+                      {local?.duration || selected?.duration || summary.plan?.duration
+                        ? `约 ${Math.round(local?.duration || selected?.duration || summary.plan?.duration || 0)} 秒`
+                        : '确认位置后计算时长'}
                     </span>
                   </div>
                   {result ? (
@@ -916,6 +960,17 @@ export function VideoExport({
                       <p>
                         同一张地图，走过每天的风景。满意后直接在本机生成视频。
                       </p>
+                      {(exportFailure || sceneLoadError) && (
+                        <p className="video-error" role="alert">
+                          {exportFailure || sceneLoadError}
+                        </p>
+                      )}
+                      {sceneLoadError && (
+                        <button className="video-secondary" disabled={encoding || busy}
+                          onClick={() => setSceneReload((value) => value + 1)}>
+                          重新加载预览
+                        </button>
+                      )}
                       <div className="browser-playback">
                         <button
                           className="video-icon-button"
@@ -964,7 +1019,7 @@ export function VideoExport({
                         )}
                         {encoding
                           ? `${Math.round(progress)}% · 本机制作中`
-                          : '导出 MP4 视频'}
+                          : exportFailure ? '重试本机导出' : '导出 MP4 视频'}
                       </button>
                       {encoding ? (
                         <button
@@ -1002,7 +1057,7 @@ export function VideoExport({
                         改用后台制作
                       </button>
                       <p className="video-smallprint">
-                        本机导出请保持页面打开。设备不支持或导出失败时，自动使用后台制作。
+                        本机导出请保持页面打开，可以切换标签页。失败后可重试，也可手动改用后台制作。
                       </p>
                     </div>
                   ) : inProgress ? (
@@ -1162,7 +1217,7 @@ export function VideoExport({
                       </fieldset>
                       <div className="video-feature-note">
                         <Check size={15} />
-                        <span>浏览器优先生成，后台制作自动兜底</span>
+                        <span>浏览器优先生成，需要时手动使用后台制作</span>
                       </div>
                       {pendingRouteEdits && (
                         <p className="video-notice" role="status">
@@ -1174,11 +1229,43 @@ export function VideoExport({
                           正在匹配地点和规划路线，请稍等片刻。
                         </p>
                       )}
-                      {!planningRoute && summary.error && (
-                        <p className="video-notice" role="status">
-                          {summary.error}
-                        </p>
-                      )}
+                      {!planningRoute &&
+                        unmatchedStops.length > 0 &&
+                        onEditStop && (
+                          <section
+                            className="video-unmatched-places"
+                            aria-label="需要确认位置的地点"
+                          >
+                            <strong>
+                              {unmatchedStops.length} 个地点需要确认位置
+                            </strong>
+                            <p>
+                              点击地点直接修改，选择实际景点、码头或车站后即可继续生成。
+                            </p>
+                            <div>
+                              {unmatchedStops.map((stop) => (
+                                <button
+                                  type="button"
+                                  key={stop.id}
+                                  disabled={encoding || busy}
+                                  onClick={() => onEditStop(stop.id)}
+                                  aria-label={`修改地点 ${stop.name}`}
+                                >
+                                  <MapPinned size={13} />
+                                  <span>{stop.name}</span>
+                                  <ChevronRight size={13} />
+                                </button>
+                              ))}
+                            </div>
+                          </section>
+                        )}
+                      {!planningRoute &&
+                        summary.error &&
+                        (!unmatchedStops.length || !onEditStop) && (
+                          <p className="video-notice" role="status">
+                            {summary.error}
+                          </p>
+                        )}
                       {capability && !capability.available && (
                         <p className="video-notice" role="status">
                           {capability.reason}

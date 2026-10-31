@@ -1,5 +1,6 @@
 import { selectVehicle, createPublicTransportModels } from './vehicles.js';
 import * as THREE from 'three';
+import { createAssetQueue, previewSize } from './playback.js';
 
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
@@ -10,13 +11,21 @@ const DATA = await fetch('plan.json').then((r) => r.json()),
   W = DATA.width,
   H = DATA.height,
   DURATION = DATA.duration;
-const PLANNING = new URLSearchParams(location.search).has('planning');
+const PARAMS = new URLSearchParams(location.search);
+const PLANNING = PARAMS.has('planning');
+let exporting = PLANNING || PARAMS.has('render');
+let seekEpoch = 0;
+const playbackStats = { frames: 0, lastFrameMs: 0 };
 const INTRO = DATA.intro,
   JOURNEY_END = DATA.journeyEnd,
   OUTRO = DURATION - JOURNEY_END,
   CAMERA_STEPS = Math.ceil(DURATION * 60);
 const TERRAIN = true;
-const DEM = await fetch('terrain-data.json').then((r) => r.json());
+let assetProgress;
+const clientRuntime = window.browserSceneRuntime ? await window.browserSceneRuntime : null;
+const directAssets = clientRuntime ? await clientRuntime.createBrowserSceneAssets(DATA, (text) => { window.sceneProgress = text; assetProgress?.(text); }) : null;
+window.addEventListener('pagehide', () => directAssets?.dispose(), { once: true });
+const DEM = directAssets ? await directAssets.terrain() : await fetch('terrain-data.json').then((r) => r.json());
 const title = DATA.title;
 const colorForDay = (day) =>
   DATA.days.find((d) => d.dayIndex === day)?.color || '#0052ff';
@@ -68,23 +77,41 @@ const ease = (t) => {
   t = clamp(t);
   return t * t * (3 - 2 * t);
 };
-const mapImages = await Promise.all(
-  MAPS.map(
-    (m) =>
-      new Promise((resolve, reject) => {
-        if (PLANNING) {
-          const c = document.createElement('canvas');
-          c.width = c.height = 1;
-          resolve(c);
-          return;
-        }
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = reject;
-        image.src = 'atlas-' + m.id + '.jpg';
-      })
-  )
-);
+const fullAtlases = MAPS.map(() => exporting);
+function atlasImage(m, index, full) {
+  if (directAssets && !PLANNING) return directAssets.atlas(m, full).then(image => { image.fullAtlas = full; return image; });
+  return new Promise((resolve, reject) => {
+    if (PLANNING) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 1;
+      resolve(c);
+      return;
+    }
+    const image = new Image();
+    const timer = setTimeout(() => {
+      image.onload = image.onerror = null;
+      image.src = '';
+      reject(new Error('基础地图加载超时'));
+    }, 45000);
+    image.onload = () => {
+      clearTimeout(timer);
+      image.fullAtlas = full;
+      resolve(image);
+    };
+    image.onerror = () => {
+      clearTimeout(timer);
+      if (!full) atlasImage(m, index, true).then(resolve, reject);
+      else reject(new Error('基础地图加载失败'));
+    };
+    image.src = (full ? '' : 'preview-') + 'atlas-' + m.id + '.jpg';
+  });
+}
+const mapImages = await Promise.all(MAPS.map(async (m, i) => {
+  const image = await atlasImage(m, i, exporting);
+  fullAtlases[i] = image.fullAtlas || exporting;
+  return image;
+}));
+const atlasTextures = [];
 const attribution = await new Promise((resolve, reject) => {
   const image = new Image();
   image.onload = () => resolve(image);
@@ -95,24 +122,24 @@ await document.fonts.ready;
 const renderer = new THREE.WebGLRenderer({
   alpha: true,
   antialias: true,
-  preserveDrawingBuffer: true,
+  preserveDrawingBuffer: false,
   powerPreference: 'high-performance'
 });
-renderer.setSize(W, H);
+
 renderer.setPixelRatio(1);
 renderer.setClearColor(PAPER, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(46, W / H, 0.03, 100000);
 scene.add(new THREE.HemisphereLight(0xffffff, 0xb0c0b3, 2.0));
 const light = new THREE.DirectionalLight(0xfff4d6, 2.8);
 light.position.set(-25, 65, 25);
 light.castShadow = true;
-light.shadow.mapSize.set(2048, 2048);
+light.shadow.mapSize.set(exporting ? 2048 : 1024, exporting ? 2048 : 1024);
 Object.assign(light.shadow.camera, {
   left: -13,
   right: 13,
@@ -125,9 +152,25 @@ light.shadow.camera.updateProjectionMatrix();
 light.shadow.bias = -0.0002;
 light.shadow.normalBias = 0.04;
 scene.add(light, light.target);
+function setRenderQuality(full) {
+  exporting = full;
+  const [width, height] = full ? [W, H] : previewSize(W, H);
+  renderer.setSize(width, height);
+  canvas.width = width;
+  canvas.height = height;
+  ctx.setTransform(width / W, 0, 0, height / H, 0, 0);
+  const shadowSize = full ? 2048 : 1024;
+  if (light.shadow.mapSize.x !== shadowSize) {
+    light.shadow.map?.dispose();
+    light.shadow.map = null;
+    light.shadow.mapSize.set(shadowSize, shadowSize);
+  }
+}
+setRenderQuality(exporting);
 for (let i = 0; i < MAPS.length; i++) {
   const m = MAPS[i],
     texture = new THREE.Texture(mapImages[i]);
+  atlasTextures.push(texture);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   texture.needsUpdate = true;
@@ -158,16 +201,17 @@ for (let i = 0; i < MAPS.length; i++) {
   scene.add(ground);
 }
 // Native zoom 16 / 17 image patches. Geometry stays in the same terrain coordinates.
-const HD_PLAN = PLANNING
+let HD_PLAN = PLANNING
   ? { tiles: [] }
-  : await fetch('detail-plan.json').then((r) => r.json());
+  : directAssets ? { tiles: [] } : await fetch('detail-plan.json').then((r) => r.json());
 const hdClock = { tick: 0 },
   hdTarget = new THREE.Vector2(),
   hdDetailRadius = { value: 6 },
   hdGlobalFade = { value: 0 };
 const hdFrustum = new THREE.Frustum(),
   hdMatrix = new THREE.Matrix4();
-const hdPatches = HD_PLAN.tiles.map((m) => {
+const hdPatches = [];
+function buildHdPatches() { return HD_PLAN.tiles.map((m) => {
   const geo = new THREE.PlaneGeometry(m.worldSize, m.worldSize, 64, 64),
     positions = geo.attributes.position;
   for (let j = 0; j < positions.count; j++)
@@ -235,7 +279,7 @@ const hdPatches = HD_PLAN.tiles.map((m) => {
       new THREE.Vector3(m.cx + m.worldSize / 2, 8, m.cz + m.worldSize / 2)
     )
   };
-});
+}); }
 function selectHd(cam) {
   hdClock.tick++;
   hdTarget.set(cam.target.x, cam.target.z);
@@ -259,44 +303,70 @@ function selectHd(cam) {
     if (p.wanted) p.lastUsed = hdClock.tick;
   }
 }
-async function ensureHd() {
-  const desired = hdPatches.filter((p) => p.wanted);
-  await Promise.all(
-    desired.map((p) => {
-      if (p.texture) return;
-      if (!p.pending)
-        p.pending = new Promise((resolve, reject) => {
-          new THREE.TextureLoader().load(
-            'detail-tiles/' + p.id + '.jpg',
-            (texture) => {
-              texture.colorSpace = THREE.SRGBColorSpace;
-              texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-              p.texture = texture;
-              p.uniforms.hdTex.value = texture;
-              p.pending = null;
-              resolve();
-            },
-            undefined,
-            () => reject(new Error('Missing HD tile: ' + p.id))
-          );
-        });
-      return p.pending;
-    })
-  );
-  const resident = hdPatches
-    .filter((p) => p.texture)
+const hdById = new Map();
+const textureStream = createAssetQueue({
+  load: async (id, signal) => {
+    const full = id.startsWith('full:');
+    const tileId = id.slice(id.indexOf(':') + 1);
+    const blob = directAssets ? await directAssets.detail(hdById.get(tileId), full) : await (async () => {
+      const response = await fetch((full ? '' : 'preview-') + 'detail-tiles/' + tileId + '.jpg', { signal });
+      if (!response.ok) throw new Error('Missing HD tile: ' + id);
+      return response.blob();
+    })();
+    const bitmap = await createImageBitmap(blob, { imageOrientation: 'flipY' });
+    if (signal.aborted) {
+      bitmap.close();
+      throw new Error('地图素材加载已取消');
+    }
+    const texture = new THREE.Texture(bitmap);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    texture.needsUpdate = true;
+    const patch = hdById.get(tileId);
+    if (patch.fullQuality && !full) {
+      bitmap.close();
+      texture.dispose();
+      return;
+    }
+    if (patch.texture) {
+      patch.texture.image.close?.();
+      patch.texture.dispose();
+    }
+    patch.fullQuality = full;
+    patch.texture = texture;
+    patch.uniforms.hdTex.value = texture;
+  }
+});
+function evictHd() {
+  const resident = hdPatches.filter((p) => p.texture)
     .sort((a, b) => b.lastUsed - a.lastUsed);
-  // Keep fewer large textures resident on user devices; visible patches are never evicted.
-  for (const p of resident.slice(
-    new URLSearchParams(location.search).has('embedded') ? 12 : 36
-  ))
+  for (const p of resident.slice(exporting ? 36 : 24))
     if (!p.wanted) {
+      p.texture.image.close?.();
       p.texture.dispose();
-      p.texture.image.src = '';
       p.texture = null;
+      p.fullQuality = false;
       p.uniforms.hdTex.value = null;
       p.mesh.visible = false;
     }
+}
+async function ensureHd(strict = false) {
+  const desired = hdPatches.filter((p) => p.wanted);
+  const prefix = strict ? 'full:' : 'preview:';
+  textureStream.retain(desired.map((p) => prefix + p.id));
+  const requests = desired.filter((p) => !p.texture || (strict && !p.fullQuality)).map((p) =>
+    textureStream.request(prefix + p.id,
+      Math.hypot(p.cx - hdTarget.x, p.cz - hdTarget.y), strict)
+  );
+  if (strict) await Promise.all(requests);
+  else await Promise.allSettled(requests);
+  evictHd();
+}
+function renderPreview(t) {
+  const result = renderAt(t);
+  // Background work never gates the animation clock or the next frame.
+  void ensureHd().catch(() => {});
+  return result;
 }
 
 const world = (p) => {
@@ -665,6 +735,8 @@ for (const segment of segments) {
   }
 }
 function updateLine(segment, progress) {
+  if (segment.drawProgress === progress) return;
+  segment.drawProgress = progress;
   const visible = progress > 0;
   segment.trail.visible = segment.outline.visible = visible;
   if (!visible) return;
@@ -995,10 +1067,7 @@ function paintOverlay(t, state, height) {
     450
   );
 }
-function renderAt(t) {
-  t = clamp(t, 0, DURATION - 0.0001);
-  const state = stateAt(t),
-    cam = camAt(t);
+function positionCamera(cam) {
   const cameraOffset = mix(
     1.05,
     0.35,
@@ -1011,6 +1080,13 @@ function renderAt(t) {
   );
   camera.lookAt(cam.target);
   camera.updateMatrixWorld();
+}
+function renderAt(t) {
+  const frameStarted = performance.now();
+  t = clamp(t, 0, DURATION - 0.0001);
+  const state = stateAt(t),
+    cam = camAt(t);
+  positionCamera(cam);
   for (const event of events) {
     event.segment.guide.visible = t < event.start;
     updateLine(
@@ -1057,6 +1133,8 @@ function renderAt(t) {
   ctx.fillRect(0, 0, W, H);
   ctx.drawImage(renderer.domElement, 0, 0, W, H);
   paintOverlay(t, state, cam.height);
+  playbackStats.frames++;
+  playbackStats.lastFrameMs = performance.now() - frameStarted;
   const actorScreen = screen(state.position, 0.4 * actor.scale.x);
   return {
     time: t,
@@ -1076,9 +1154,13 @@ function renderAt(t) {
 window.__video = {
   seek: renderAt,
   seekAsync: async (t) => {
-    renderAt(t);
-    await ensureHd();
-    return renderAt(t);
+    const epoch = seekEpoch;
+    // Calculate visibility without drawing a throwaway frame before loading.
+    const cam = camAt(t);
+    positionCamera(cam);
+    selectHd(cam);
+    await ensureHd(true);
+    if (epoch === seekEpoch) return renderAt(t);
   },
   duration: DURATION
 };
@@ -1098,14 +1180,17 @@ window.followDiagnostics = {
   city: city.stats,
   renderer: renderer.capabilities.maxTextureSize,
   overview: [overview.x, overview.z],
+  assets: () => directAssets?.stats() || { source: 'server' },
+  playback: () => ({ ...playbackStats, width: canvas.width, height: canvas.height,
+    exporting, fullAtlases: fullAtlases.filter(Boolean).length, ...textureStream.stats() }),
   hd: () => ({
     wanted: hdPatches.filter((p) => p.wanted).length,
-    loaded: hdPatches.filter((p) => p.texture).length
+    loaded: hdPatches.filter((p) => p.texture).length,
+    fullQuality: hdPatches.filter((p) => p.texture && p.fullQuality).length
   }),
   projectAllStops: () =>
     stops.map((s) => ({ ...screen(s.world), name: s.name }))
 };
-renderAt(0);
 const controls = document.getElementById('controls'),
   button = document.getElementById('play'),
   scrub = document.getElementById('scrub'),
@@ -1120,11 +1205,7 @@ scrub.max = String(DURATION - 0.01);
 let playing = false,
   current = 0,
   last = 0,
-  renderQueue = Promise.resolve();
-function seekQueued(t) {
-  renderQueue = renderQueue.then(() => window.__video.seekAsync(t));
-  return renderQueue;
-}
+  lastDraw = 0;
 function show() {
   scrub.value = current;
   document.getElementById('clock').textContent =
@@ -1142,18 +1223,35 @@ window.__video.setTime = async (t) => {
   window.__video.pause();
   current = clamp(t, 0, DURATION - 0.001);
   music.currentTime = current;
-  await seekQueued(current);
+  renderPreview(current);
   show();
 };
 window.__video.getTime = () => current;
 window.__video.isPlaying = () => playing;
-window.__video.prepareExport = async () => {
+window.__video.prepareExport = async (progress) => {
+  assetProgress = progress;
   window.__video.pause();
-  await renderQueue;
+  seekEpoch++;
+  setRenderQuality(true);
+  const epoch = seekEpoch;
+  try { await Promise.all(MAPS.map(async (m, i) => {
+    if (fullAtlases[i]) return;
+    const image = await atlasImage(m, i, true);
+    if (epoch !== seekEpoch) return;
+    fullAtlases[i] = true;
+    atlasTextures[i].image = image;
+    atlasTextures[i].needsUpdate = true;
+  })); } finally { assetProgress = null; }
+};
+window.__video.finishExport = () => {
+  seekEpoch++;
+  setRenderQuality(false);
+  renderPreview(current);
 };
 window.addEventListener(
   'webglcontextlost',
   (event) => {
+    if (event.target !== renderer.domElement) return;
     event.preventDefault();
     window.sceneError = '设备图形资源不足';
   },
@@ -1170,10 +1268,10 @@ button.onclick = () => {
 scrub.oninput = async () => {
   current = +scrub.value;
   music.currentTime = current;
-  await seekQueued(current);
+  renderPreview(current);
   show();
 };
-async function tick(now) {
+function tick(now) {
   if (playing) {
     current += (now - last) / 1000;
     if (current >= DURATION) {
@@ -1182,8 +1280,11 @@ async function tick(now) {
       music.pause();
       button.textContent = '播放';
     }
-    await seekQueued(current);
-    show();
+    if (now - lastDraw >= 1000 / 30 - 1) {
+      renderPreview(current);
+      lastDraw = now;
+      show();
+    }
   }
   last = now;
   requestAnimationFrame(tick);
@@ -1216,5 +1317,22 @@ window.detailPlanningSamples = () => {
   }
   return samples;
 };
-await window.__video.seekAsync(0);
+if (directAssets && !PLANNING) HD_PLAN = clientRuntime.createDetailPlan(DATA, window.detailPlanningSamples());
+hdPatches.push(...buildHdPatches());
+for (const patch of hdPatches) hdById.set(patch.id, patch);
+if (window.browserSceneMusic) {
+  const settings = window.browserSceneMusic;
+  const musicController = new AbortController();
+  window.addEventListener('pagehide', () => musicController.abort(), { once: true });
+  const sourceUrl = settings.options.music === 'library' ? settings.url + '-source' : undefined;
+  const blob = await clientRuntime.browserMusicSource(settings.options, DURATION, sourceUrl,
+    (text) => { window.sceneProgress = text; }, musicController.signal);
+  const url = blob ? URL.createObjectURL(blob) : settings.url;
+  if (url) music.src = url;
+  else music.removeAttribute('src');
+  if (blob) window.addEventListener('pagehide', () => URL.revokeObjectURL(url), { once: true });
+  window.__video.getAudioBlob = () => blob;
+}
+if (exporting) await window.__video.seekAsync(0);
+else renderPreview(0);
 window.sampleReady = true;

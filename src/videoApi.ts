@@ -42,9 +42,11 @@ export const createVideoScene = (
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ itinerary, options })
   });
-export const fallbackVideoJob = (id: string) =>
+export const fallbackVideoJob = (id: string, uploadId?: string) =>
   request<{ job: VideoJob }>(`/jobs/${encodeURIComponent(id)}/fallback`, {
-    method: 'POST'
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ uploadId })
   });
 export const cancelVideoJob = (id: string) =>
   request<{ job: VideoJob }>(`/jobs/${encodeURIComponent(id)}/cancel`, {

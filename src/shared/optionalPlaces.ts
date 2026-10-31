@@ -20,22 +20,41 @@ export function getDayActivityOptions(
   day: ItineraryDay,
   recommendations?: Recommendations
 ): Stop[] {
-  function regionFor(item: Pick<Stop, 'province' | 'city' | 'district'>) {
+  // Saved itineraries may already contain recommendations copied to every day.
+  // Use the actual day's places, including resolved POI regions, to filter those too.
+  const cityOf = (place: Pick<Stop, 'city' | 'poiMatch'>) =>
+    normalizeRegion(place.city || place.poiMatch?.city);
+  const provinceOf = (place: Pick<Stop, 'province' | 'poiMatch'>) =>
+    normalizeRegion(place.province || place.poiMatch?.province);
+  const cities = new Set(day.stops.flatMap((stop) => [
+    cityOf(stop), normalizeRegion(stop.district),
+    normalizeRegion(stop.poiMatch?.city), normalizeRegion(stop.poiMatch?.district)
+  ]).filter(Boolean));
+  const provinces = new Set(day.stops.map(provinceOf).filter(Boolean));
+  function belongsToDay(place: Pick<Stop, 'city' | 'province' | 'poiMatch'>) {
+    const city = cityOf(place);
+    const province = provinceOf(place);
+    if (city && cities.size && !cities.has(city)) return false;
+    if (province && provinces.size && !provinces.has(province)) return false;
+    return true;
+  }
+  function regionFor(item: Pick<Stop, 'province' | 'city' | 'district' | 'poiMatch'>) {
+    const city = item.city || item.poiMatch?.city;
     const anchor = day.stops.find(
       (stop) =>
-        !item.city ||
-        [stop.city, stop.district].some(
+        !city ||
+        [stop.city, stop.district, stop.poiMatch?.city].some(
           (region) =>
-            region && normalizeRegion(region) === normalizeRegion(item.city)
+            region && normalizeRegion(region) === normalizeRegion(city)
         )
     );
     return {
-      province: item.province || anchor?.province,
-      city: item.city || anchor?.city,
-      district: item.district || anchor?.district
+      province: item.province || item.poiMatch?.province || anchor?.province || anchor?.poiMatch?.province,
+      city: city || anchor?.city || anchor?.poiMatch?.city,
+      district: item.district || item.poiMatch?.district || anchor?.district
     };
   }
-  const options: Stop[] = (day.activityOptions || []).map((option) => ({
+  const options: Stop[] = (day.activityOptions || []).filter(belongsToDay).map((option) => ({
     ...option,
     ...regionFor(option)
   }));
@@ -52,6 +71,7 @@ export function getDayActivityOptions(
     ['lodging', 'stay']
   ] as const) {
     for (const item of recommendations?.[group] || []) {
+      if (!belongsToDay(item)) continue;
       if (
         options.some(
           (option) =>

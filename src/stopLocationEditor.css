@@ -1,0 +1,209 @@
+.stop-location-editor {
+  padding: 20px 24px 24px;
+  color: #294262;
+}
+.place-editor-intro {
+  margin: 0 0 18px;
+  color: #6f829d;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.stop-location-editor fieldset {
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.stop-location-editor label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 13px;
+}
+.stop-location-editor input {
+  width: 100%;
+  display: block;
+  margin-top: 7px;
+  padding: 11px;
+  border: 1px solid #d6e0ed;
+  border-radius: 8px;
+  color: #294262;
+  background: white;
+  min-height: 42px;
+  font: inherit;
+}
+.stop-location-editor input:focus-visible {
+  outline: 2px solid #97b5e3;
+  outline-offset: 2px;
+}
+.place-region-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.place-search-button,
+.place-editor-footer button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #b7cae5;
+  border-radius: 8px;
+  padding: 11px 16px;
+  background: #eaf1fc;
+  color: #406da7;
+  font-size: 12px;
+  min-height: 42px;
+}
+.place-search-button {
+  width: 100%;
+}
+.stop-location-editor button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.place-search-results {
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 18px;
+}
+.place-search-results > p {
+  font-size: 11px;
+  color: #7188a3;
+  line-height: 1.7;
+}
+.place-result {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid #dbe4ef;
+  background: white;
+  border-radius: 10px;
+  margin: 8px 0;
+  padding: 13px;
+  text-align: left;
+  color: #7893b5;
+}
+.place-result > span {
+  flex: 1;
+  min-width: 0;
+}
+.place-result strong {
+  display: block;
+  color: #2e4d72;
+  font-size: 13px;
+  font-weight: 550;
+}
+.place-result small {
+  display: block;
+  color: #7890ac;
+  font-size: 11px;
+  margin-top: 5px;
+  line-height: 1.5;
+}
+.place-result.selected {
+  background: #edf4ff;
+  border-color: #719ad3;
+  box-shadow: 0 0 0 1px #719ad3;
+}
+.place-editor-footer {
+  border-top: 1px solid #dae3ef;
+  margin-top: 18px;
+  padding-top: 14px;
+}
+.place-editor-footer > p {
+  font-size: 11px;
+  color: #7890ac;
+  line-height: 1.7;
+}
+.place-editor-footer button {
+  width: 100%;
+  color: white;
+  background: #416da9;
+  border-color: #416da9;
+}
+.place-editor-error {
+  color: #be5d5d;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.video-unmatched-places {
+  border: 1px solid #bc9d522b;
+  border-radius: 12px;
+  background: #b89d3710;
+  padding: 15px;
+  margin: 14px 0;
+  color: #b3a476;
+}
+.video-unmatched-places > strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+}
+.video-unmatched-places > p {
+  font-size: 11px;
+  line-height: 1.8;
+  margin: 6px 0 10px;
+  color: #9ba9bc;
+}
+.video-unmatched-places > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.video-unmatched-places button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid #9cafd148;
+  border-radius: 8px;
+  background: #7791b417;
+  color: #becfe8;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.video-unmatched-places button:hover {
+  background: #7791b42e;
+  border-color: #9cafd180;
+}
+.stop-edit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 9px;
+  margin-top: 10px;
+  border: 1px solid #789ac04d;
+  border-radius: 7px;
+  background: #7791b417;
+  color: #8daed9;
+  font-size: 11px;
+}
+.video-unmatched-places button:disabled,
+.stop-edit-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (max-width: 760px) {
+  .stop-location-editor {
+    padding: 17px;
+  }
+  .place-region-fields {
+    grid-template-columns: 1fr 1fr;
+  }
+  .place-region-fields > label:last-child {
+    grid-column: 1/-1;
+  }
+  .place-search-results {
+    max-height: 230px;
+  }
+  .video-unmatched-places button {
+    font-size: 12px;
+    min-height: 40px;
+  }
+}
+.place-editor-footer { position: sticky; bottom: 0; z-index: 1; background: #f5f7fb; padding-bottom: 4px; box-shadow: 0 -12px 16px #f5f7fb; }

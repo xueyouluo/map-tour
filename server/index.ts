@@ -213,6 +213,8 @@ app.use('/_AMapService', (req, res, next) => {
 if (process.env.NODE_ENV === 'production') {
   const distPath = path.resolve(projectRoot, 'dist');
   app.use(express.static(distPath));
+  // Missing module URLs must fail instead of returning the SPA as JavaScript.
+  app.get('/assets/*', (_req, res) => res.sendStatus(404));
   app.get('*', (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });

@@ -23,7 +23,7 @@ const groups = [
   {
     id: 'video',
     title: '视频与音乐',
-    body: '优先在浏览器生成 MP4；设备不支持或导出失败时使用本机后台。'
+    body: '浏览器直接准备地图并生成 MP4；只有手动选择时才交给服务器后台制作。'
   }
 ];
 async function request(
@@ -219,6 +219,7 @@ export function SettingsPanel() {
                       <span>
                         输出 <b>1080P · MP4 · 9:16</b>
                       </span>
+                      <p>地图素材由浏览器直连下载。音乐 CDN 需先上传同名曲库文件并允许跨域；留空时使用服务器上的压缩音频。</p>
                       {data.status.videoReason && (
                         <p>{data.status.videoReason}</p>
                       )}

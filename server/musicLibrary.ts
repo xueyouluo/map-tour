@@ -10,7 +10,16 @@ interface MusicAsset extends Omit<VideoMusicTrack, 'previewUrl'> {
   sha256: string;
 }
 
+export function musicCdnUrl(file: string): string | undefined {
+  const base = process.env.VIDEO_MUSIC_CDN_URL;
+  if (!base) return undefined;
+  const url = new URL(base.endsWith('/') ? base : base + '/');
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('音乐 CDN 地址需要是不含认证信息的 HTTPS 目录。');
+  return new URL(file, url).href;
+}
+
 export class MusicLibrary {
+  private readonly verifiedFiles = new Map<string, string>();
   constructor(
     public readonly root = path.resolve(
       process.env.VIDEO_MUSIC_DIR || path.join(projectRoot, 'assets/music')
@@ -52,13 +61,13 @@ export class MusicLibrary {
           fs.existsSync(path.join(this.root, track.file)) &&
           fs.existsSync(path.join(this.root, track.previewFile))
       )
-      .map(({ id, title, version, mood, duration }) => ({
+      .map(({ id, title, version, mood, duration, previewFile }) => ({
         id,
         title,
         version,
         mood,
         duration,
-        previewUrl: `/api/video/music/${id}/preview`
+        previewUrl: musicCdnUrl(previewFile) || `/api/video/music/${id}/preview`
       }));
   }
 
@@ -69,11 +78,14 @@ export class MusicLibrary {
       previewFile = path.join(this.root, track.previewFile);
     if (!fs.existsSync(file) || !fs.existsSync(previewFile)) return null;
     // Track fingerprints must identify the exact bytes used by both renderers.
-    const sha256 = createHash('sha256')
-      .update(fs.readFileSync(file))
-      .digest('hex');
-    if (sha256 !== track.sha256)
-      throw new Error('内置音乐文件校验失败，请重新导入。');
-    return { ...track, file, previewFile, sha256 };
+    const stat = fs.statSync(file, { bigint: true });
+    const revision = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, track.sha256].join(':');
+    if (this.verifiedFiles.get(file) !== revision) {
+      const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (sha256 !== track.sha256)
+        throw new Error('内置音乐文件校验失败，请重新导入。');
+      this.verifiedFiles.set(file, revision);
+    }
+    return { ...track, file, previewFile, audioUrl: musicCdnUrl(track.file) };
   }
 }

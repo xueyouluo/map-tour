@@ -275,3 +275,48 @@ it('only requests two new walking routes after a restaurant is inserted and pres
   for (const segment of original.routeSegments.slice(1))
     expect(result.routeSegments).toContainEqual(segment);
 });
+
+it('searches manual replacements in the requested city and only returns valid local coordinates', async () => {
+  const { searchPoiCandidates } = await import('./amap');
+  const search = vi.fn((_query, callback) =>
+    callback('complete', {
+      poiList: {
+        pois: [
+          {
+            id: 'local',
+            name: '东湖',
+            pname: '湖北省',
+            cityname: '武汉市',
+            location: { lng: 114.4, lat: 30.5 }
+          },
+          {
+            id: 'far',
+            name: '东湖',
+            pname: '吉林省',
+            cityname: '长春市',
+            location: { lng: 125.3, lat: 43.8 }
+          },
+          { id: 'bad', name: '缺失坐标', pname: '湖北省', cityname: '武汉市' }
+        ]
+      }
+    })
+  );
+  const construct = vi.fn();
+  const AMap = {
+    PlaceSearch: class {
+      constructor(options: unknown) {
+        construct(options);
+      }
+      search = search;
+    }
+  };
+  const results = await searchPoiCandidates(AMap, '东湖', {
+    province: '湖北省',
+    city: '武汉市'
+  });
+  expect(construct).toHaveBeenCalledWith(
+    expect.objectContaining({ city: '武汉市', citylimit: true })
+  );
+  expect(results.map((p) => p.poiId)).toEqual(['local']);
+  expect(search).toHaveBeenCalledOnce();
+});

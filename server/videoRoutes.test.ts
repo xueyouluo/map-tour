@@ -64,6 +64,22 @@ it('serves library previews with range support without exposing full files or ca
     expect(Buffer.from(await preview.arrayBuffer()).toString()).toBe('libr');
     expect((await fetch(url + '/music/unknown/preview')).status).toBe(404);
     expect((await fetch(url + '/music/test-a/full')).status).toBe(404);
+    const cookie = listed.headers.get('set-cookie')!.split(';')[0];
+    const owner = createHash('sha256').update(cookie.split('=')[1]).digest('hex');
+    const trip = normalizeParsedItinerary({ days: [{ stops: [{ name: 'A' }] }] }, 'audio-trip');
+    trip.days[0].stops[0].poiMatch = { name: 'A', status: 'matched', location: [120, 30] };
+    const scene = jobs.create(owner, trip, { music: 'library', trackId: 'test-a' }, 'scene');
+    const audioPath = `/jobs/${scene.id}/audio`;
+    expect((await fetch(url + audioPath)).status).toBe(404);
+    expect((await fetch(url + audioPath + '-source')).status).toBe(404);
+    const source = await fetch(url + audioPath + '-source', { headers: { cookie } });
+    expect(source.headers.get('cache-control')).toBe('private, no-store');
+    expect(await source.json()).toEqual({ url: '/api/video' + audioPath, sha256 });
+    const audio = await fetch(url + audioPath, { headers: { cookie, range: 'bytes=0-3' } });
+    expect(audio.status).toBe(206);
+    expect(audio.headers.get('content-type')).toContain('audio/mpeg');
+    expect(Buffer.from(await audio.arrayBuffer()).toString()).toBe('libr');
+
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -155,6 +171,7 @@ it('serves only owner-scoped prepared scene files and uses the same-origin runti
       'detail-plan.json'
     ])
       fs.writeFileSync(path.join(render, name), '{}');
+    fs.writeFileSync(path.join(render, 'attribution.png'), 'fixture-image');
     fs.writeFileSync(
       path.join(render, 'manifest.json'),
       JSON.stringify({ status: 'prepared' })
@@ -197,9 +214,10 @@ it('serves only owner-scoped prepared scene files and uses the same-origin runti
     expect(response.status).toBe(200);
     expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
     expect(response.headers.get('cache-control')).toContain('private');
-    expect(await response.text()).toContain(
-      '/api/video/runtime/three/build/three.module.js'
-    );
+    const html = await response.text();
+    expect(html).toContain('/api/video/runtime/three/0.186.1/build/three.module.js');
+    expect(html).toContain('window.browserSceneRuntime');
+    expect(html).not.toContain('src="music.wav"');
     expect((await fetch(url + `/jobs/${job.id}/scene/plan.json`)).status).toBe(
       404
     );
@@ -210,6 +228,28 @@ it('serves only owner-scoped prepared scene files and uses the same-origin runti
         })
       ).status
     ).toBe(200);
+    const runtime = await fetch(url + `/jobs/${job.id}/scene/playback.js`, {
+      headers: { cookie }
+    });
+    expect(runtime.status).toBe(200);
+    expect(await runtime.text()).toContain('createAssetQueue');
+    expect((await fetch(url + `/jobs/${job.id}/scene/playback.js`)).status)
+      .toBe(404);
+    const imageUrl = url + `/jobs/${job.id}/scene/attribution.png`;
+    const image = await fetch(imageUrl, { headers: { cookie } });
+    expect(image.headers.get('cache-control')).toBe('private, no-cache');
+    const etag = image.headers.get('etag')!;
+    expect((await fetch(imageUrl, {
+      headers: { cookie, 'if-none-match': etag, 'cache-control': 'max-age=0' }
+    })).status).toBe(304);
+    expect((await fetch(imageUrl, {
+      headers: { 'if-none-match': etag }
+    })).status).toBe(404);
+    expect((await fetch(url + `/jobs/${job.id}/scene/preview-atlas-region.jpg`)).status)
+      .toBe(404);
+    expect((await fetch(url + `/jobs/${job.id}/scene/preview-input.json`, {
+      headers: { cookie }
+    })).status).toBe(404);
     expect(
       (await fetch(url + `/jobs/${job.id}/scene/vehicles.js`)).status
     ).toBe(404);

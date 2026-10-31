@@ -72,5 +72,5 @@
       }
     }
   </script>
-  <script type="module">import('./film.js').catch(() => { window.sceneError = '场景加载失败'; });</script>
+  <script type="module">import('./film.js').catch((error) => { window.sceneError = error?.message || '场景加载失败'; });</script>
 </html>

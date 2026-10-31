@@ -12,6 +12,7 @@ import type {
   VideoMusicUpload
 } from '../src/shared/videoExport';
 import { chromePath, projectRoot } from '../tools/video-preview/runtime.mjs';
+import { writeBrowserScene } from './browserScenes';
 import { MusicLibrary } from './musicLibrary';
 
 export const VIDEO_UPLOAD_LIMIT = 25 * 1024 * 1024;
@@ -66,12 +67,11 @@ export function getVideoCapabilities(): VideoCapabilities {
         stdio: 'ignore',
         timeout: 5000
       });
-    return { ...base, available: true };
+    return { ...base, available: true, backgroundAvailable: true };
   } catch {
     return {
       ...base,
-      available: false,
-      reason: '视频服务暂不可用，请稍后再试。'
+      available: true, backgroundAvailable: false
     };
   }
 }
@@ -180,9 +180,10 @@ export class VideoJobs {
             .findIndex((j) => j.id === job.id)
         : 0;
     if (job.state === 'completed') {
-      if (job.kind === 'scene')
+      if (job.kind === 'scene') {
+        result.browserAssets = true;
         result.sceneUrl = `/api/video/jobs/${job.id}/scene/film.html?embedded`;
-      else {
+      } else {
         result.videoUrl = `/api/video/jobs/${job.id}/video`;
         result.downloadUrl = `/api/video/jobs/${job.id}/download`;
         result.coverUrl = `/api/video/jobs/${job.id}/cover`;
@@ -214,12 +215,12 @@ export class VideoJobs {
     if (this.stopping)
       throw new VideoRequestError('视频服务正在重启，请稍后再试。', 503);
     const storage = fs.statfsSync(this.root);
-    if (storage.bavail * storage.bsize < 2 * 1024 ** 3)
+    if (storage.bavail * storage.bsize < (kind === 'scene' ? 20 * 1024 ** 2 : 2 * 1024 ** 3))
       throw new VideoRequestError(
         '视频服务可用空间不足，暂时无法制作新视频。已有视频仍可下载。',
         507
       );
-    const options = parseExportOptions(raw);
+    const options = parseExportOptions(raw, kind === 'scene');
     let plan;
     try {
       plan = createVideoPlan(source, {
@@ -238,7 +239,11 @@ export class VideoJobs {
     let audioPath: string | undefined,
       musicName = options.music === 'upbeat' ? '轻快出发' : '无配乐',
       musicHash: string = options.music;
-    if (options.music === 'upload') {
+    if (options.music === 'upload' && options.localMusic) {
+      if (options.localMusic.duration < plan.duration) throw new VideoRequestError('音乐短于视频，请选择其他音乐。');
+      musicName = options.localMusic.name;
+      musicHash = options.uploadId!;
+    } else if (options.music === 'upload') {
       const upload = this.upload(owner, options.uploadId!);
       if (!fs.existsSync(upload.file))
         throw new VideoRequestError('音乐已过期，请重新上传。');
@@ -268,7 +273,7 @@ export class VideoJobs {
           source,
           options,
           musicHash,
-          kind || 'video',
+          kind === 'scene' ? 'browser-direct-v1' : 'video',
           plan.duration,
           plan.events
         ])
@@ -294,6 +299,13 @@ export class VideoJobs {
             )
           : ''
       )
+      .update(
+        kind === 'scene'
+          ? fs.readFileSync(
+              path.join(projectRoot, 'tools/video-preview/browser/playback.js')
+            )
+          : ''
+      )
       .digest('hex');
     const active = this.records().filter((j) => activeStates.includes(j.state));
     const duplicate = active.find(
@@ -308,9 +320,7 @@ export class VideoJobs {
           j.state === 'completed' &&
           j.expiresAt &&
           Date.parse(j.expiresAt) > Date.now() &&
-          fs.existsSync(
-            path.join(this.directory(j.id), 'render', 'assets-check.json')
-          )
+          [j.browserAssets ? 'manifest.json' : 'assets-check.json', 'film.html', 'plan.json', 'vehicles.js', 'attribution.png'].every(file => fs.existsSync(path.join(this.directory(j.id), 'render', file)))
       );
       if (prepared) return this.publicJob(prepared);
     }
@@ -326,7 +336,7 @@ export class VideoJobs {
       directory = this.directory(id);
     fs.mkdirSync(directory);
     const job: JobRecord = {
-      ...(kind ? { kind } : {}),
+      ...(kind ? { kind, browserAssets: true } : {}),
       id,
       owner,
       fingerprint,
@@ -350,8 +360,13 @@ export class VideoJobs {
       path.join(directory, 'input.json'),
       JSON.stringify(job.snapshot)
     );
+    if (kind === 'scene') {
+      writeBrowserScene(path.join(directory, 'render'), plan);
+      Object.assign(job, { state: 'completed', progress: 100, stage: '浏览器场景已准备好',
+        finishedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + VIDEO_RETENTION_DAYS * DAY).toISOString() });
+    }
     this.save(job);
-    this.kick();
+    if (kind !== 'scene') this.kick();
     return this.publicJob(job);
   }
 
@@ -376,9 +391,15 @@ export class VideoJobs {
       throw new VideoRequestError('这个视频不需要重试。');
     return this.create(owner, job.snapshot, job.options, job.kind);
   }
-  fallback(owner: string, id: string): VideoJob {
+  fallback(owner: string, id: string, uploadId?: string): VideoJob {
     const job = this.record(owner, id);
-    return this.create(owner, job.snapshot, job.options);
+    const options = { ...job.options };
+    if (options.localMusic) {
+      if (!uploadId) throw new VideoRequestError('后台制作前请先上传所选音乐。');
+      delete options.localMusic;
+      options.uploadId = uploadId;
+    }
+    return this.create(owner, job.snapshot, options);
   }
   sceneFile(owner: string, id: string, name: string) {
     const job = this.record(owner, id);
@@ -387,14 +408,30 @@ export class VideoJobs {
     if (!job.expiresAt || Date.parse(job.expiresAt) < Date.now())
       throw new VideoRequestError('场景已过期，请重新预览。', 410);
     if (
-      !/^(film\.(html|js)|vehicles\.js|plan\.json|terrain-data\.json|detail-plan\.json|attribution\.png|music\.wav|atlas-[\w-]+\.jpg|detail-tiles\/[\w-]+\.jpg)$/.test(
+      !/^(film\.(html|js)|playback\.js|vehicles\.js|plan\.json|terrain-data\.json|detail-plan\.json|attribution\.png|music\.wav|atlas-[\w-]+\.jpg|detail-tiles\/[\w-]+\.jpg)$/.test(
         name
       )
     )
       throw new VideoRequestError('没有找到这个素材。', 404);
-    const file = path.join(this.directory(id), 'render', name);
+    // Existing prepared previews receive playback fixes without regenerating maps.
+    // Owner and expiry checks above still apply to every runtime request.
+    const file = ['film.html', 'film.js', 'playback.js'].includes(name)
+      ? path.join(projectRoot, 'tools/video-preview/browser', name)
+      : path.join(this.directory(id), 'render', name);
     if (!fs.existsSync(file)) throw new VideoRequestError('素材不可用。', 404);
     return file;
+  }
+  sceneAudio(owner: string, id: string): { file?: string; url?: string; sha256?: string } {
+    const job = this.record(owner, id);
+    if (job.kind !== 'scene' || job.state !== 'completed') throw new VideoRequestError('场景尚未准备好。', 409);
+    if (!job.expiresAt || Date.parse(job.expiresAt) < Date.now()) throw new VideoRequestError('场景已过期。', 410);
+    if (job.options.music === 'library') {
+      const track = this.musicLibrary.get(job.options.trackId!);
+      if (!track) throw new VideoRequestError('音乐不可用。', 404);
+      return { ...(track.audioUrl ? { url: track.audioUrl } : { file: track.file }), sha256: track.sha256 };
+    }
+    if (job.options.music === 'upload' && !job.options.localMusic && job.audioPath && fs.existsSync(job.audioPath)) return { file: job.audioPath };
+    throw new VideoRequestError('这首配乐在浏览器本地读取。', 404);
   }
   remove(owner: string, id: string) {
     const job = this.record(owner, id);
@@ -506,6 +543,7 @@ export class VideoJobs {
         .then(() => this.processQueue())
         .finally(() => {
           this.processing = undefined;
+          if (!this.stopping && this.records().some(job => job.state === 'queued')) this.kick();
         });
   }
   private async processQueue() {
@@ -744,7 +782,7 @@ export class VideoJobs {
   }
 }
 
-export function parseExportOptions(raw: unknown): VideoExportOptions {
+export function parseExportOptions(raw: unknown, allowLocalMusic = false): VideoExportOptions {
   const data = raw as Record<string, unknown>;
   if (
     !data ||
@@ -771,7 +809,16 @@ export function parseExportOptions(raw: unknown): VideoExportOptions {
       !/^[a-z0-9-]{1,80}$/.test(data.trackId))
   )
     throw new VideoRequestError('请选择一首内置音乐。');
+  let localMusic: VideoExportOptions['localMusic'];
+  if (data.localMusic !== undefined) {
+    const local = data.localMusic as Record<string, unknown>;
+    if (!allowLocalMusic || data.music !== 'upload' || !local || typeof local.name !== 'string' || !local.name.trim() || local.name.length > 160 ||
+      typeof local.duration !== 'number' || !Number.isFinite(local.duration) || local.duration < 1 || local.duration > 86400)
+      throw new VideoRequestError('本地音乐信息无效，请重新选择。');
+    localMusic = { name: local.name, duration: local.duration };
+  }
   return {
+    ...(localMusic ? { localMusic } : {}),
     music: data.music as VideoExportOptions['music'],
     durationSeconds: data.durationSeconds as number | undefined,
     ...(data.music === 'upload' ? { uploadId: data.uploadId as string } : {}),

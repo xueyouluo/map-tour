@@ -1,3 +1,5 @@
+import { StopLocationEditor } from './StopLocationEditor';
+import { updateStopLocation } from './shared/stopLocations';
 import {
   AuthProvider,
   AuthPage,
@@ -45,6 +47,7 @@ import {
   Share2,
   SlidersHorizontal,
   Settings2,
+  Pencil,
   Trash2,
   X,
   type LucideIcon
@@ -85,6 +88,7 @@ import {
   type RoutePreference,
   type ShareStatus,
   type Stop,
+  type PoiCandidate,
   type TripScope
 } from './shared/itinerary';
 
@@ -139,6 +143,18 @@ function MainApp({ pathname }: { pathname: string }) {
   const [homeExample, setHomeExample] = useState<ImportExample>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [itinerary, setItinerary] = useState<Itinerary | null>(null);
+  const [editingStopId, setEditingStopId] = useState<string | null>(null);
+  const editingStop =
+    itinerary && editingStopId
+      ? [
+          ...itinerary.days.flatMap((day) => [
+            ...day.stops,
+            ...day.alternatives,
+            ...(day.activityOptions || [])
+          ]),
+          ...itinerary.alternatives
+        ].find((stop) => stop.id === editingStopId)
+      : undefined;
   const [activeDay, setActiveDay] = useState<ActiveDay>('all');
   const [routePreference, setRoutePreference] =
     useState<RoutePreference>('auto');
@@ -343,6 +359,38 @@ function MainApp({ pathname }: { pathname: string }) {
     },
     [saveHistoryRecord]
   );
+
+  function handleEditStop(stopId: string) {
+    if (encodingVideo || isPlanningRoute || applyingActivities) return;
+    if (!user) {
+      openAuth();
+      return;
+    }
+    setError('');
+    setEditingStopId(stopId);
+  }
+
+  async function handleSaveStopLocation(candidate: PoiCandidate) {
+    if (!itinerary || !editingStopId || !user)
+      throw new Error('请先登录并选择需要修改的地点。');
+    if (readOnly && !canCreateItinerary(user))
+      throw new Error('新建额度已用完，无法另存分享行程。');
+    let next = updateStopLocation(itinerary, editingStopId, candidate);
+    if (readOnly) next = { ...next, id: 'draft', shareStatus: 'draft' };
+    const saved = await saveItinerary(next);
+    setItinerary(saved.itinerary);
+    setReadOnly(false);
+    setSelectedStopId(editingStopId);
+    setEditingStopId(null);
+    if (readOnly) {
+      window.history.replaceState(
+        null,
+        '',
+        '/s/' + encodeURIComponent(saved.itinerary.id)
+      );
+      void refreshAccount();
+    }
+  }
 
   function handleStopDelete(stopId: string) {
     setSelectedStopId(null);
@@ -654,6 +702,10 @@ function MainApp({ pathname }: { pathname: string }) {
             selectedStopId={selectedStopId}
             onStopSelect={setSelectedStopId}
             onStopDelete={handleStopDelete}
+            onStopEdit={handleEditStop}
+            stopEditingBusy={
+              isPlanningRoute || encodingVideo || applyingActivities
+            }
             readOnly={readOnly}
           />
         )}
@@ -683,11 +735,17 @@ function MainApp({ pathname }: { pathname: string }) {
               planningRoute={isPlanningRoute || applyingActivities}
               pendingRouteEdits={activityChangeCount > 0}
               embedded
-              visible={studioView === 'film' && !newTripOpen && !settingsOpen}
+              visible={
+                studioView === 'film' &&
+                !newTripOpen &&
+                !settingsOpen &&
+                !editingStop
+              }
               chapterDay={activeDay}
               focusStopId={selectedStopId}
               exportRequest={exportRequest}
               onEncodingChange={setEncodingVideo}
+              onEditStop={handleEditStop}
             />
           </div>
         )}
@@ -756,6 +814,16 @@ function MainApp({ pathname }: { pathname: string }) {
         </div>
       )}
 
+      {editingStop && (
+        <StopLocationEditor
+          key={editingStop.id}
+          stop={editingStop}
+          scope={itinerary?.tripScope}
+          fork={readOnly}
+          onClose={() => setEditingStopId(null)}
+          onSave={handleSaveStopLocation}
+        />
+      )}
       {newTripOpen && (
         <AppDialog
           title="新建行程"
@@ -979,6 +1047,8 @@ function ItineraryPanel({
   selectedStopId,
   onStopSelect,
   onStopDelete,
+  onStopEdit,
+  stopEditingBusy,
   readOnly,
   onActivityToggle,
   onActivityLocate,
@@ -1005,6 +1075,8 @@ function ItineraryPanel({
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete: (stopId: string) => void;
+  onStopEdit: (stopId: string) => void;
+  stopEditingBusy: boolean;
   readOnly: boolean;
 }) {
   const pendingPoi = hasPendingPoiMatches(itinerary);
@@ -1093,6 +1165,8 @@ function ItineraryPanel({
               selectedStopId={selectedStopId}
               onStopSelect={onStopSelect}
               onStopDelete={!readOnly ? onStopDelete : undefined}
+              onStopEdit={onStopEdit}
+              stopEditingBusy={stopEditingBusy}
             />
             <ActivityOptions
               day={day}
@@ -1111,6 +1185,8 @@ function ItineraryPanel({
             selectedStopId={selectedStopId}
             onStopSelect={onStopSelect}
             onStopDelete={!readOnly ? onStopDelete : undefined}
+            onStopEdit={onStopEdit}
+            stopEditingBusy={stopEditingBusy}
           />
         )}
       </div>
@@ -1334,13 +1410,17 @@ function DaySection({
   sectionRef,
   selectedStopId,
   onStopSelect,
-  onStopDelete
+  onStopDelete,
+  onStopEdit,
+  stopEditingBusy
 }: {
   day: ItineraryDay;
   sectionRef?: (node: HTMLDivElement | null) => void;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete?: (stopId: string) => void;
+  onStopEdit: (stopId: string) => void;
+  stopEditingBusy: boolean;
 }) {
   const color = colorForDay(day.dayIndex);
   return (
@@ -1372,6 +1452,8 @@ function DaySection({
             selected={selectedStopId === stop.id}
             onSelect={onStopSelect}
             onDelete={onStopDelete}
+            onEdit={onStopEdit}
+            editingBusy={stopEditingBusy}
           />
         ))}
       </div>
@@ -1382,6 +1464,8 @@ function DaySection({
           selectedStopId={selectedStopId}
           onStopSelect={onStopSelect}
           onStopDelete={onStopDelete}
+          onStopEdit={onStopEdit}
+          stopEditingBusy={stopEditingBusy}
         />
       )}
     </div>
@@ -1393,13 +1477,17 @@ function AlternativeSection({
   title,
   selectedStopId,
   onStopSelect,
-  onStopDelete
+  onStopDelete,
+  onStopEdit,
+  stopEditingBusy
 }: {
   stops: Stop[];
   title: string;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete?: (stopId: string) => void;
+  onStopEdit: (stopId: string) => void;
+  stopEditingBusy: boolean;
 }) {
   return (
     <div className="alt-section">
@@ -1412,6 +1500,8 @@ function AlternativeSection({
           selected={selectedStopId === stop.id}
           onSelect={onStopSelect}
           onDelete={onStopDelete}
+          onEdit={onStopEdit}
+          editingBusy={stopEditingBusy}
         />
       ))}
     </div>
@@ -1423,29 +1513,35 @@ function StopCard({
   compact = false,
   selected,
   onSelect,
-  onDelete
+  onDelete,
+  onEdit,
+  editingBusy
 }: {
   stop: Stop;
   compact?: boolean;
   selected: boolean;
   onSelect: (stopId: string) => void;
   onDelete?: (stopId: string) => void;
+  onEdit: (stopId: string) => void;
+  editingBusy: boolean;
 }) {
   const status = stop.poiMatch?.status;
   const isMatched = status === 'matched';
   const canFocusMap = Boolean(stop.poiMatch?.location);
   const handleSelect = () => {
     if (canFocusMap) onSelect(stop.id);
+    else if (!editingBusy) onEdit(stop.id);
   };
 
   return (
     <article
       className={`stop-card ${compact ? 'compact' : ''} ${status === 'unmatched' ? 'unmatched' : ''} ${!canFocusMap ? 'not-focusable' : ''} ${selected ? 'selected' : ''}`}
       role="button"
-      tabIndex={canFocusMap ? 0 : -1}
-      aria-disabled={!canFocusMap}
+      tabIndex={0}
+      aria-label={canFocusMap ? stop.name : `修改地点 ${stop.name}`}
       onClick={handleSelect}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           handleSelect();
@@ -1528,9 +1624,22 @@ function StopCard({
       {stop.poiMatch?.address && <small>{stop.poiMatch.address}</small>}
       {status === 'unmatched' && (
         <small>
-          {stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，将仅保留在列表中。
+          {stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，请选择准确位置。
         </small>
       )}
+      <button
+        type="button"
+        className="stop-edit-button"
+        disabled={editingBusy}
+        aria-label={`修改地点 ${stop.name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onEdit(stop.id);
+        }}
+      >
+        <Pencil size={12} />
+        {canFocusMap ? '修改地点' : '确认位置'}
+      </button>
     </article>
   );
 }
@@ -1807,7 +1916,7 @@ function MapView({
     );
     drawingRef.current = drawResult;
     drawResult.setAppearance(appearance);
-    const overlays = drawResult.overlays;
+    const overlays = drawResult.fitOverlays;
     overlaysRef.current = overlays;
     stopLookupRef.current = drawResult.stopLookup;
     if (overlays.length) {

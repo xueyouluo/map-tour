@@ -14,6 +14,7 @@ import {
   estimatePoiConfidence
 } from './shared/poiMatching';
 import { activitySymbol } from './shared/activities';
+import { hasValidLocation } from './shared/stopLocations';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { chooseRouteMode, distanceMeters } from './shared/geo';
 import { getVisibleDays } from './shared/itinerary';
@@ -271,6 +272,53 @@ async function resolvePlaceContext(
   }
   const resolved = await cache.get(address)!;
   return { ...resolved, locationHint: context.locationHint };
+}
+
+export async function searchPoiCandidates(
+  AMap: AMapNamespace,
+  query: string,
+  context: PoiSearchContext
+): Promise<PoiCandidate[]> {
+  const keyword = query.trim();
+  if (!keyword) throw new Error('请填写地点名称。');
+  const city = context.district || context.city || context.province;
+  for (let attempt = 0; attempt <= MAX_AMAP_RETRIES; attempt++) {
+    await waitForAmapSlot();
+    const result: any = await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('地点搜索超时，请重试。')),
+        15000
+      );
+      const search = new AMap.PlaceSearch({
+        city,
+        citylimit: Boolean(city),
+        pageSize: 20,
+        pageIndex: 1,
+        extensions: 'all'
+      });
+      search.search(keyword, (status: string, data: any) => {
+        clearTimeout(timer);
+        resolve({ status, data });
+      });
+    });
+    const error = getAmapErrorInfo(result.status, result.data);
+    if (
+      isQpsLimitError(error, result.data?.infocode || result.status) &&
+      attempt < MAX_AMAP_RETRIES
+    ) {
+      await sleep(QPS_RETRY_DELAY_MS * (attempt + 1));
+      continue;
+    }
+    if (!['complete', 'no_data'].includes(result.status))
+      throw new Error(error || '地点搜索暂不可用，请重试。');
+    return (result.data?.poiList?.pois || [])
+      .map(normalizePoi)
+      .filter(
+        (poi: PoiCandidate) =>
+          hasValidLocation(poi.location) && candidateFitsRegion(poi, context)
+      );
+  }
+  return [];
 }
 
 async function matchStop(
@@ -639,6 +687,7 @@ async function waitForAmapSlot(): Promise<void> {
 export type JourneyMapAppearance = 'atlas' | 'satellite';
 export interface JourneyMapDrawing {
   overlays: any[];
+  fitOverlays: any[];
   stopLookup: Map<
     string,
     {
@@ -713,6 +762,7 @@ export function drawJourneyMap(
   pendingActivityChanges = false
 ): JourneyMapDrawing {
   const overlays: any[] = [];
+  const fitOverlays: any[] = [];
   const routeLines: { line: any; casing: boolean; dayIndex: number }[] = [];
   const stopLookup: JourneyMapDrawing['stopLookup'] = new Map();
   const roots: {
@@ -747,6 +797,7 @@ export function drawJourneyMap(
         });
         map.add(line);
         overlays.push(line);
+        fitOverlays.push(line);
         routeLines.push({ line, casing, dayIndex: segment.dayIndex });
       }
     }
@@ -836,6 +887,7 @@ export function drawJourneyMap(
     });
     map.add(marker);
     overlays.push(marker);
+    if (!mapOnlyStop && !stop.isAlternative) fitOverlays.push(marker);
     const hit: JourneyMapDrawing['stopLookup'] extends Map<string, infer T>
       ? T
       : never = { marker, stop, location, infoWindow };
@@ -984,6 +1036,7 @@ export function drawJourneyMap(
   }
   return {
     overlays,
+    fitOverlays: fitOverlays.length ? fitOverlays : overlays,
     stopLookup,
     select,
     layout: schedule,
