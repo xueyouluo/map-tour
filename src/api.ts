@@ -2,6 +2,7 @@ import type { Itinerary, ItinerarySummary } from './shared/itinerary';
 import { prepareImportImage } from './browserImportImage';
 
 export interface RuntimeConfig {
+  supportedServiceRegion?: 'CN_MAINLAND';
   amapKey: string;
   canManageSettings?: boolean;
   amapMapStyle?: string;

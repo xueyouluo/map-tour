@@ -18,6 +18,7 @@ import { hasConfiguredAiRuntime, parseItinerary } from './openaiParser';
 
 const parsed = {
   title: '武汉一日游',
+  serviceRegion: 'CN_MAINLAND',
   language: 'zh-CN',
   dateRange: { start: '', end: '', label: '' },
   tripScope: {
@@ -33,8 +34,8 @@ const parsed = {
       date: '',
       title: '武汉一日游',
       stops: [
-        { order: 1, name: '湖北省博物馆', city: '武汉' },
-        { order: 2, name: '东湖绿道', city: '武汉' }
+        { order: 1, name: '湖北省博物馆', province: '湖北省', city: '武汉', countryCode: 'CN' },
+        { order: 2, name: '东湖绿道', province: '湖北省', city: '武汉', countryCode: 'CN' }
       ],
       alternatives: []
     }
@@ -113,11 +114,31 @@ it('does not use old image credentials when the shared runtime is missing', asyn
   vi.stubEnv('OPENAI_API_KEY', '');
   expect(hasConfiguredAiRuntime()).toBe(false);
   await expect(parseItinerary({ image })).rejects.toThrow('配置行程解析模型');
-  expect(
-    (await parseItinerary({ text: '武汉一日游\n湖北省博物馆 → 东湖绿道' }))
-      .source
-  ).toBe('local-fallback');
+  await expect(parseItinerary({ text: 'Day 1 东京\n浅草寺 → 东京塔' }))
+    .rejects.toThrow('仅支持中国大陆');
   expect(sdk.construct).not.toHaveBeenCalled();
+});
+
+it('rejects unsupported and uncertain model results for text and screenshots, including streams', async () => {
+  for (const stream of [false, true]) for (const withImage of [false, true]) {
+    const result = { ...parsed, serviceRegion: 'UNSUPPORTED' };
+    sdk.chat.mockImplementation(async (request) => request.stream
+      ? (async function* () { yield { choices: [{ delta: { content: JSON.stringify(result) } }] }; })()
+      : { choices: [{ message: { content: JSON.stringify(result) } }] });
+    await expect(parseItinerary({ text: '北京和东京旅行', ...(withImage ? { image } : {}) }, { stream }))
+      .rejects.toMatchObject({ status: 422, message: expect.stringContaining('仅支持中国大陆') });
+  }
+  for (const serviceRegion of ['UNKNOWN', undefined]) {
+    sdk.chat.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ ...parsed, serviceRegion }) } }] });
+    await expect(parseItinerary({ text: '行程' })).rejects.toMatchObject({ status: 422 });
+  }
+});
+
+it('checks countries on raw stops even if the model marks the overall trip as mainland', async () => {
+  const foreign = structuredClone(parsed);
+  foreign.days[0].stops.push({ order: 3, name: '浅草寺', countryCode: 'JP', province: '东京都', city: '东京' });
+  sdk.chat.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(foreign) } }] });
+  await expect(parseItinerary({ text: '武汉和东京' })).rejects.toMatchObject({ status: 422 });
 });
 
 it('reports unsupported image input without retrying other models or dropping the screenshot', async () => {

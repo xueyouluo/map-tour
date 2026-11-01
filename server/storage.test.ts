@@ -39,6 +39,7 @@ describe('ItineraryStore', () => {
 
     const itinerary = normalizeParsedItinerary({
       title: 'Test Trip',
+      tripScope: { mode: 'single_city', province: '浙江省', primaryCity: '杭州市' },
       days: [{ title: 'Day 1', stops: [{ name: 'A' }], alternatives: [] }],
       alternatives: []
     });
@@ -53,6 +54,7 @@ describe('ItineraryStore', () => {
 
     const second = normalizeParsedItinerary({
       title: 'Second Trip',
+      tripScope: { mode: 'single_city', province: '浙江省', primaryCity: '杭州市' },
       days: [
         {
           title: 'Day 1',

@@ -265,6 +265,7 @@ export function ImportPanel({
           {progressMessage}
         </p>
       ) : null}
+      <p className="import-region-note">目前支持中国大陆行程，暂不支持港澳台及海外。</p>
     </section>
   );
 }

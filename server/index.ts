@@ -24,6 +24,7 @@ import {
 import { SettingsStore, settingsRouter } from './settings';
 import { videoRouter } from './videoRoutes';
 import { resolveJourneyMapStyle } from '../src/shared/mapTheme';
+import { SUPPORTED_SERVICE_REGION } from '../src/shared/serviceRegion';
 
 dotenv.config();
 const serviceSettings = new SettingsStore();
@@ -101,6 +102,7 @@ app.get('/api/config', (req, res) => {
   const hasAiRuntime = hasConfiguredAiRuntime();
   res.json({
     amapKey: process.env.AMAP_JSAPI_KEY || '',
+    supportedServiceRegion: SUPPORTED_SERVICE_REGION,
     amapMapStyle: resolveJourneyMapStyle(process.env.AMAP_MAP_STYLE_ID),
     hasAmapProxy: Boolean(process.env.AMAP_SECURITY_JS_CODE),
     hasAiRuntime,

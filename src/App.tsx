@@ -818,11 +818,11 @@ function MainApp({ pathname }: { pathname: string }) {
         </div>
       )}
 
-      {editingStop && (
+      {editingStop && itinerary && (
         <StopLocationEditor
           key={editingStop.id}
           stop={editingStop}
-          scope={itinerary?.tripScope}
+          itinerary={itinerary}
           fork={readOnly}
           onClose={() => setEditingStopId(null)}
           onSave={handleSaveStopLocation}

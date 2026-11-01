@@ -1,4 +1,5 @@
 import { HttpError } from './httpSecurity';
+import { assertMainlandItinerary } from './serviceRegion';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -83,6 +84,7 @@ export class ItineraryStore {
     itinerary: Itinerary,
     access?: { userId: string; admin: boolean }
   ): Promise<StoredItinerary> {
+    assertMainlandItinerary(itinerary);
     const db = this.database();
     const id =
       itinerary.id && itinerary.id !== 'draft' ? itinerary.id : createShareId();

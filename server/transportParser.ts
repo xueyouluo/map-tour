@@ -1,4 +1,5 @@
 import { legPairKey } from '../src/shared/routeUpdates';
+import { assertMainlandItinerary } from './serviceRegion';
 import OpenAI from 'openai';
 import { resolveAiRuntime } from './openaiParser';
 import {
@@ -12,6 +13,7 @@ import type { ArrivalMeta } from '../src/shared/activities';
 export async function inferJourneyTransport(
   itinerary: Itinerary
 ): Promise<Itinerary> {
+  assertMainlandItinerary(itinerary);
   if (!Array.isArray(itinerary?.days) || itinerary.days.length > 60)
     throw new Error('行程数据无效');
   const pending =

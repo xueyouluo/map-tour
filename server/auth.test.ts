@@ -286,6 +286,7 @@ it('enforces the three-itinerary limit atomically while preserving edits, privat
   const input = () =>
     normalizeParsedItinerary({
       title: 'private',
+      tripScope: { mode: 'single_city', province: '浙江省', primaryCity: '杭州市' },
       days: [{ stops: [{ name: 'A' }] }]
     });
   const results = await Promise.allSettled(
@@ -321,7 +322,7 @@ it('moves history to a private recycle bin, restores shared links and preserves 
   const bobCookie = cookie(await call('/api/auth/login', 'POST', { username: 'bob', password }));
   const adminCookie = cookie(await call('/api/auth/login', 'POST', { username: 'admin', password }));
   const access = { userId: alice.id, admin: false };
-  const input = () => normalizeParsedItinerary({ title: '回收站测试', days: [{ stops: [{ name: '西湖' }] }] });
+  const input = () => normalizeParsedItinerary({ title: '回收站测试', tripScope: { mode: 'single_city', province: '浙江省', primaryCity: '杭州市' }, days: [{ stops: [{ name: '西湖' }] }] });
   const trip = await store.save({ ...input(), shareStatus: 'shared' }, access);
   const route = '/api/itineraries/' + trip.id;
   expect((await call(route)).status).toBe(200);

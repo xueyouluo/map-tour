@@ -3,29 +3,29 @@ import { Check, Loader2, MapPin, Search } from 'lucide-react';
 import { AppDialog } from './AppDialog';
 import { getConfig } from './api';
 import { loadAMap, searchPoiCandidates } from './amap';
-import type { PoiCandidate, Stop, TripScope } from './shared/itinerary';
+import type { Itinerary, PoiCandidate, Stop } from './shared/itinerary';
 import { hasValidLocation } from './shared/stopLocations';
+import { stopLocationDefaults } from './shared/stopLocationDefaults';
 import './stopLocationEditor.css';
 
 export function StopLocationEditor({
   stop,
-  scope,
+  itinerary,
   fork,
   onClose,
   onSave
 }: {
   stop: Stop;
-  scope?: TripScope;
+  itinerary: Itinerary;
   fork: boolean;
   onClose: () => void;
   onSave: (candidate: PoiCandidate) => Promise<void>;
 }) {
   const [query, setQuery] = useState(stop.name);
-  const [province, setProvince] = useState(
-    stop.province || scope?.province || ''
-  );
-  const [city, setCity] = useState(stop.city || scope?.primaryCity || '');
-  const [district, setDistrict] = useState(stop.district || '');
+  const [defaults] = useState(() => stopLocationDefaults(stop, itinerary));
+  const [province, setProvince] = useState(defaults.province || '');
+  const [city, setCity] = useState(defaults.city || '');
+  const [district, setDistrict] = useState(defaults.district || '');
   const [results, setResults] = useState<PoiCandidate[]>(
     (stop.poiMatch?.candidates || []).filter((p) =>
       hasValidLocation(p.location)
@@ -100,6 +100,7 @@ export function StopLocationEditor({
     >
       <div className="stop-location-editor">
         <p className="place-editor-intro">
+          {(defaults.province || defaults.city) && '已预填所在地区，可直接修改。'}
           搜索并选择准确的位置。轮渡请选择实际码头；“武汉站/汉口站”这类二选一地点请选择实际出发站。
         </p>
         <form onSubmit={search}>

@@ -1474,3 +1474,11 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 }
+/* Keep the coverage promise visible in both home and dialog imports. */
+.import-region-note {
+  margin: 10px 0 0;
+  color: #7186a1;
+  font-size: 11px;
+  line-height: 1.7;
+  text-align: center;
+}

@@ -1,4 +1,4 @@
-import { sameOriginMutation } from './httpSecurity';
+import { HttpError, sameOriginMutation } from './httpSecurity';
 import { createHash, randomBytes } from 'node:crypto';
 import express from 'express';
 import multer from 'multer';
@@ -6,6 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { projectRoot } from '../tools/video-preview/runtime.mjs';
 import { browserSceneRuntimeUrl } from './browserScenes';
+import { assertMainlandItinerary } from './serviceRegion';
 import { createPreviewImageCache } from './videoPreviewImages';
 import {
   VideoJobs,
@@ -91,6 +92,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
     })
   );
   router.post('/scenes', (req, res) => {
+    assertMainlandItinerary(req.body?.itinerary);
     const capability = available();
     if (!capability.available)
       throw new VideoRequestError(
@@ -165,6 +167,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
     res.json({ job: jobs.get(owner(req), req.params.id) })
   );
   router.post('/jobs', (req, res) => {
+    assertMainlandItinerary(req.body?.itinerary);
     const capability = available();
     if (!capability.available || capability.backgroundAvailable === false)
       throw new VideoRequestError(
@@ -216,7 +219,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
       res: express.Response,
       _next: express.NextFunction
     ) => {
-      if (error instanceof VideoRequestError)
+      if (error instanceof VideoRequestError || error instanceof HttpError)
         return res.status(error.status).json({ error: error.message });
       if (error instanceof multer.MulterError)
         return res

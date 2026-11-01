@@ -14,7 +14,7 @@ afterEach(() => {
 function fixture() {
   vi.stubEnv('OPENAI_API_KEY', 'test');
   vi.stubEnv('OPENAI_MODEL', 'deepseek-flash');
-  return normalizeParsedItinerary({
+  const itinerary = normalizeParsedItinerary({
     days: [
       {
         stops: [
@@ -34,6 +34,9 @@ function fixture() {
       { stops: [{ name: '市区' }] }
     ]
   });
+  for (const [index, stop] of itinerary.days.flatMap((day) => day.stops).entries())
+    stop.poiMatch = { name: stop.name, status: 'matched', location: [120 + index * 0.01, 30] };
+  return itinerary;
 }
 it('requires an answer for every adjacent leg and preserves explicit boat evidence across AI reassessment', async () => {
   const i = fixture(),
@@ -146,4 +149,11 @@ it('does not call a model when an edit has no changed legs', async () => {
   const next = await inferJourneyTransport(source);
   expect(mock.create).not.toHaveBeenCalled();
   expect(next.transportNeedsReview).toBe(false);
+});
+
+it('rejects overseas coordinates before spending a model request', async () => {
+  const source = fixture();
+  source.days[0].stops[0].poiMatch!.location = [139.69, 35.68];
+  await expect(inferJourneyTransport(source)).rejects.toMatchObject({ status: 422 });
+  expect(mock.create).not.toHaveBeenCalled();
 });

@@ -6,6 +6,9 @@ import {
   type ParsedItinerary
 } from '../src/shared/itinerary';
 import { cleanParsedItinerary } from './itineraryCleanup';
+import { assertMainlandItinerary } from './serviceRegion';
+import { HttpError } from './httpSecurity';
+import { MAINLAND_ONLY_MESSAGE } from '../src/shared/serviceRegion';
 
 export interface ParseInput {
   text?: string;
@@ -43,6 +46,7 @@ const parseSchema = {
   additionalProperties: false,
   required: [
     'title',
+    'serviceRegion',
     'language',
     'dateRange',
     'tripScope',
@@ -52,6 +56,7 @@ const parseSchema = {
   ],
   properties: {
     title: { type: 'string' },
+    serviceRegion: { type: 'string', enum: ['CN_MAINLAND', 'UNSUPPORTED', 'UNKNOWN'] },
     language: { type: 'string' },
     dateRange: {
       type: 'object',
@@ -136,6 +141,7 @@ function parsedStopSchema() {
       'note',
       'city',
       'province',
+      'countryCode',
       'district',
       'locationHint',
       'time',
@@ -149,6 +155,7 @@ function parsedStopSchema() {
       note: { type: 'string' },
       city: { type: 'string' },
       province: { type: 'string' },
+      countryCode: { type: 'string' },
       district: { type: 'string' },
       locationHint: { type: 'string' },
       time: { type: 'string' },
@@ -277,10 +284,12 @@ export async function parseItinerary(
       );
     }
 
+    const itinerary = normalizeParsedItinerary(
+      cleanParsedItinerary(localParse(input.text || ''), input.text || '')
+    );
+    assertMainlandItinerary(itinerary);
     return {
-      itinerary: normalizeParsedItinerary(
-        cleanParsedItinerary(localParse(input.text || ''), input.text || '')
-      ),
+      itinerary,
       source: 'local-fallback',
       warning: '未配置文本解析模型，已使用本地规则解析。'
     };
@@ -312,15 +321,22 @@ export async function parseItinerary(
       message: '模型返回完成，正在校验结构化结果...'
     });
     const parsed = parseModelJson(jsonText) as ParsedItinerary;
+    if (parsed.serviceRegion !== 'CN_MAINLAND')
+      throw new HttpError(422, MAINLAND_ONLY_MESSAGE + '请提供明确的中国大陆目的地。');
+    // Check the raw stops as well: cleanup must not erase an unsupported place.
+    assertMainlandItinerary(normalizeParsedItinerary(parsed));
     const cleaned = completeDailyActivities(
       cleanParsedItinerary(parsed, input.text || '')
     );
     assertUsableAiParse(cleaned, input.text || '');
+    const itinerary = normalizeParsedItinerary(cleaned);
+    assertMainlandItinerary(itinerary);
     return {
-      itinerary: normalizeParsedItinerary(cleaned),
+      itinerary,
       source: 'openai'
     };
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     if (input.image && isUnsupportedImageError(error)) {
       throw new Error(
@@ -758,6 +774,8 @@ function buildParserInstructions(): string {
     'title 必须是整趟旅行的短标题，例如“宁波 3 日亲子行程”“杭州三日懒人逛吃攻略”；不要复制第一天的长句、交通句或完整路线。',
     'day.title 必须是当天短主题或区域，例如“南部片区到老外滩”“西湖经典线”；不要把当天所有 stop、时间、交通方式都写进标题。',
     '必须判断 tripScope：按实际行政目的地判断是否跨城，不能凭自驾、环岛、环线或分三天就判为multi_city。岛内南线北线仍可能single_city，车站/机场离开或推荐返程城市不能反向污染所有景点。证据不足时unknown。',
+    '服务目前只支持中国大陆目的地。必须输出 serviceRegion：所有实际目的地（含备选、吃住推荐和出入境交通端点）明确位于中国大陆时为 CN_MAINLAND；含港澳台或海外目的地为 UNSUPPORTED；无法确认则 UNKNOWN。遇到不支持的地点仍完整保留，不删除、改成国内同名地或伪造省市。餐厅品牌、菜系或酒店名称出现国家词不等于海外旅行。',
+    '每个地点必须提取 countryCode（ISO 两位代码，中国大陆 CN，香港 HK，澳门 MO，台湾 TW，其他如 JP、US；未知留空）和省市。中国大陆地点尽量补全真实 province，即使推荐餐馆和住宿也不能省略。',
     'tripScope.primaryCity 只在 single_city 时填写主城市；multi_city 或 unknown 时填空字符串。tripScope.cities 填明确涉及的城市/州/县级目的地，按行程顺序去重。',
     '只提取真实路线 stop：景点、博物馆、公园、寺庙、街区、商场、夜市、车站、机场、明确作为路线点的酒店等。',
     '天气/预约/价格等是原文建议，放 note 并注明原文信息，不要补写或验证当前政策，不要作为地点。住宿区域推荐必须保留在 recommendations.lodging；只给片区时 placeKind=area，searchName 用明确区域锚点如龙翔桥，不得虚构酒店。',
@@ -772,7 +790,7 @@ function buildParserInstructions(): string {
     'activity.kind=visit/meal/stay，source=explicit（原文明确）或 default（推荐选择），placeKind=venue/area，meal=breakfast/lunch/dinner/none，quote 是不超过60字的原文证据，searchName 是单个可检索地名。远观雷峰塔不属于登塔行程，不应添加到实际路线。二选一默认第一条方案为主路线，第二方案保留在当天 alternatives 并在 note 标注方案，不要串成同一天的必去行程。',
     '按原文 day 顺序输出。原文有 Day1/Day2/Day3 时，输出这些 travel days，不要把前言或推荐区变成额外 day。',
     '输出 schema: { title: string, language: string, dateRange: {start:string,end:string,label:string}, tripScope:{mode:string,primaryCity:string,cities:string[],confidence:number,reason:string}, recommendations:{lodging:[],dining:[]}, days: [{dayIndex:number,date:string,title:string,activityOptions:[],stops:[{order:number,name:string,note:string,province:string,city:string,district:string,locationHint:string,time:string,category:string,activity:{kind:string,source:string,placeKind:string,meal:string,quote:string,searchName:string},arrival:{mode:string,label:string,quote:string}}],alternatives:[]}], alternatives: [] }。',
-    'JSON保持紧凑，note和reason每项尽量控制在40字内；交通未知字段省略，不必为每个推荐餐厅输出空arrival或重复大段说明。推荐列表只需name、city、note和activity。',
+    'JSON保持紧凑，note和reason每项尽量控制在40字内；交通未知字段省略，不必为每个推荐餐厅输出空arrival或重复大段说明。推荐列表保留name、countryCode、province、city、note和activity。顶层必须包含serviceRegion，所有地点保留countryCode。',
     '缺失字段用空字符串或空数组，不要用 null。'
   ].join('\n');
 }

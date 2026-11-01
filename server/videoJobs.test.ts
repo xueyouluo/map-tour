@@ -6,6 +6,7 @@ import { normalizeParsedItinerary } from '../src/shared/itinerary';
 import { VideoJobs, parseExportOptions } from './videoJobs';
 import { MusicLibrary } from './musicLibrary';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 
 const roots: string[] = [],
   managers: VideoJobs[] = [];
@@ -107,6 +108,40 @@ afterEach(async () => {
   for (const manager of managers.splice(0)) await manager.close();
   for (const directory of roots.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
+});
+
+it('blocks legacy overseas queue jobs, retries, fallback and prepared scene access', async () => {
+  const directory = root();
+  const initial = new VideoJobs(directory, async () => {});
+  await initial.close();
+  const trip = source();
+  trip.days[0].stops[0].poiMatch!.location = [139.69, 35.68];
+  const db = new DatabaseSync(path.join(directory, 'jobs.sqlite'));
+  const base = {
+    owner: 'alice', snapshot: trip, fingerprint: 'legacy-foreign',
+    itineraryId: trip.id, title: trip.title, state: 'queued', options: { music: 'none' },
+    createdAt: new Date().toISOString(), progress: 0, duration: 60, days: 1, stops: 2
+  };
+  const queuedId = '11111111-1111-4111-8111-111111111111';
+  const sceneId = '22222222-2222-4222-8222-222222222222';
+  for (const payload of [
+    { ...base, id: queuedId },
+    { ...base, id: sceneId, kind: 'scene', state: 'completed', browserAssets: true,
+      expiresAt: new Date(Date.now() + 86400000).toISOString() }
+  ]) db.prepare('insert into jobs values(?,?,?,?,?,?)').run(
+    payload.id, payload.owner, payload.state, payload.fingerprint, payload.createdAt, JSON.stringify(payload)
+  );
+  db.close();
+  const runner = vi.fn(async () => {});
+  const manager = new VideoJobs(directory, runner);
+  managers.push(manager);
+  await vi.waitFor(() => expect(manager.get('alice', queuedId).state).toBe('failed'));
+  expect(runner).not.toHaveBeenCalled();
+  expect(manager.get('alice', queuedId).error).toContain('仅支持中国大陆');
+  expect(() => manager.retry('alice', queuedId)).toThrow('仅支持中国大陆');
+  expect(() => manager.fallback('alice', sceneId)).toThrow('仅支持中国大陆');
+  expect(() => manager.sceneFile('alice', sceneId, 'plan.json')).toThrow('仅支持中国大陆');
+  expect(manager.list('alice')).toHaveLength(2);
 });
 
 describe('persistent video jobs', () => {

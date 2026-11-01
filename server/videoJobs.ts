@@ -1,4 +1,6 @@
 import { journeySignature } from '../src/shared/journeySignature';
+import { assertMainlandItinerary } from './serviceRegion';
+import { HttpError } from './httpSecurity';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -84,6 +86,9 @@ export class VideoJobs {
   private stopping = false;
   private cleanupTimer: ReturnType<typeof setInterval>;
   private runner: Runner;
+  // Persisted job snapshots are immutable. Validate once per process, rather
+  // than repeating polygon checks for every image/JS request of a scene.
+  private acceptedSnapshots = new Set<string>();
 
   constructor(
     public readonly root = path.resolve(
@@ -191,6 +196,11 @@ export class VideoJobs {
     }
     return result;
   }
+  private assertSnapshotCoverage(job: JobRecord) {
+    if (this.acceptedSnapshots.has(job.id)) return;
+    assertMainlandItinerary(job.snapshot);
+    this.acceptedSnapshots.add(job.id);
+  }
   list(owner: string, itineraryId?: string): VideoJob[] {
     this.cleanup();
     return this.records()
@@ -212,6 +222,7 @@ export class VideoJobs {
     raw: unknown,
     kind?: 'scene'
   ): VideoJob {
+    assertMainlandItinerary(source);
     if (this.stopping)
       throw new VideoRequestError('视频服务正在重启，请稍后再试。', 503);
     const storage = fs.statfsSync(this.root);
@@ -366,6 +377,7 @@ export class VideoJobs {
         finishedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + VIDEO_RETENTION_DAYS * DAY).toISOString() });
     }
     this.save(job);
+    this.acceptedSnapshots.add(job.id);
     if (kind !== 'scene') this.kick();
     return this.publicJob(job);
   }
@@ -403,6 +415,7 @@ export class VideoJobs {
   }
   sceneFile(owner: string, id: string, name: string) {
     const job = this.record(owner, id);
+    this.assertSnapshotCoverage(job);
     if (job.kind !== 'scene' || job.state !== 'completed')
       throw new VideoRequestError('场景尚未准备好。', 409);
     if (!job.expiresAt || Date.parse(job.expiresAt) < Date.now())
@@ -438,6 +451,7 @@ export class VideoJobs {
     if (activeStates.includes(job.state))
       throw new VideoRequestError('请先取消正在制作的视频。');
     this.db.prepare('delete from jobs where id=? and owner=?').run(id, owner);
+    this.acceptedSnapshots.delete(id);
     fs.rmSync(this.directory(id), { recursive: true, force: true });
   }
   media(owner: string, id: string, kind: 'video' | 'cover') {
@@ -559,6 +573,7 @@ export class VideoJobs {
         progress: 2
       });
       try {
+        this.assertSnapshotCoverage(queued);
         await this.runner(queued, {
           signal: controller.signal,
           progress: (value, stage) => {
@@ -631,7 +646,8 @@ export class VideoJobs {
             ? undefined
             : this.stopping
               ? '生成服务重启，视频没有完成。可以重新生成。'
-              : publicRenderError(error),
+              : error instanceof HttpError && error.status === 422
+                ? error.message : publicRenderError(error),
           finishedAt: new Date().toISOString()
         });
       } finally {

@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { assertMainlandMapRequest } from './serviceRegion';
 
 const AMAP_REST_ORIGIN = 'https://restapi.amap.com';
 
@@ -6,6 +7,7 @@ export function buildAmapProxyUrl(originalUrl: string, securityJsCode: string): 
   const pathAndQuery = originalUrl.replace(/^\/_AMapService/, '') || '/';
   const url = new URL(pathAndQuery, AMAP_REST_ORIGIN);
   if (url.origin !== AMAP_REST_ORIGIN) throw new Error('Invalid map proxy origin');
+  assertMainlandMapRequest(url);
   url.searchParams.set('jscode', securityJsCode);
   return url.toString();
 }

@@ -154,6 +154,7 @@ export function cleanStop(
   return {
     order: stop.order && stop.order > 0 ? stop.order : fallbackOrder,
     name,
+    countryCode: stop.countryCode?.trim().toUpperCase() || '',
     note: dedupeText(notes).join('；'),
     city: normalizeStopCity(
       stop.city,

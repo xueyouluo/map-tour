@@ -1,6 +1,7 @@
 import { getDayActivityOptions } from './optionalPlaces';
 import { normalizeArrival } from './transport';
 import type { ActivityMeta, ArrivalMeta, Recommendations } from './activities';
+import type { ServiceRegion } from './serviceRegion';
 export type Coordinate = [number, number];
 
 export type MatchStatus = 'pending' | 'matched' | 'unmatched';
@@ -69,6 +70,7 @@ export interface PoiMatch extends PoiCandidate {
 }
 
 export interface Stop {
+  countryCode?: string;
   id: string;
   dayIndex: number;
   order: number;
@@ -112,6 +114,7 @@ export interface RouteSegment {
 }
 
 export interface Itinerary {
+  serviceRegion?: ServiceRegion;
   schemaVersion?: 2;
   transportNeedsReview?: boolean;
   transportReviewLegs?: { fromStopId: string; toStopId: string }[];
@@ -143,6 +146,7 @@ export interface ItinerarySummary {
 }
 
 export interface ParsedStop {
+  countryCode?: string;
   province?: string;
   district?: string;
   locationHint?: string;
@@ -166,6 +170,7 @@ export interface ParsedDay {
 }
 
 export interface ParsedItinerary {
+  serviceRegion?: ServiceRegion;
   recommendations?: Recommendations;
   title?: string;
   language?: string;
@@ -257,6 +262,7 @@ export function normalizeParsedItinerary(
   return {
     id,
     schemaVersion: 2,
+    serviceRegion: parsed.serviceRegion,
     recommendations: parsed.recommendations,
     title: parsed.title?.trim() || 'Untitled itinerary',
     language: parsed.language?.trim() || 'auto',
@@ -304,6 +310,7 @@ function normalizeStop(
         : `R${order}`
       : createStopLabel(dayIndex, order),
     name: stop.name.trim(),
+    countryCode: stop.countryCode?.trim().toUpperCase() || '',
     note: stop.note?.trim() || '',
     city: stop.city?.trim() || '',
     province: stop.province?.trim() || '',
