@@ -80,11 +80,16 @@ export class MusicLibrary {
     // Track fingerprints must identify the exact bytes used by both renderers.
     const stat = fs.statSync(file, { bigint: true });
     const revision = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, track.sha256].join(':');
-    if (this.verifiedFiles.get(file) !== revision) {
+    // Rapid writes can share one filesystem clock tick, even with nanosecond
+    // stat fields. Cache only settled assets; a fresh write must be hashed again.
+    const changedAt = Number((stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs) / 1_000_000n);
+    const settled = Date.now() - changedAt >= 1000;
+    if (!settled || this.verifiedFiles.get(file) !== revision) {
       const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
       if (sha256 !== track.sha256)
         throw new Error('内置音乐文件校验失败，请重新导入。');
-      this.verifiedFiles.set(file, revision);
+      if (settled) this.verifiedFiles.set(file, revision);
+      else this.verifiedFiles.delete(file);
     }
     return { ...track, file, previewFile, audioUrl: musicCdnUrl(track.file) };
   }

@@ -42,6 +42,7 @@ afterEach(() => {
 it('reuses verified immutable audio without rereading it on each request and detects replacements', () => {
   const { library, root, track } = fixture();
   const file = path.join(root, track.file);
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
   const read = vi.spyOn(fs, 'readFileSync');
   library.get(track.id);
   library.get(track.id);
@@ -49,6 +50,20 @@ it('reuses verified immutable audio without rereading it on each request and det
   const replacement = file + '.tmp';
   fs.writeFileSync(replacement, Buffer.alloc(fs.statSync(file).size));
   fs.renameSync(replacement, file);
+  expect(() => library.get(track.id)).toThrow('校验失败');
+});
+
+it('rechecks fresh audio when equal-length writes share the same filesystem timestamp', () => {
+  const { library, root, track } = fixture();
+  const file = path.join(root, track.file);
+  const stat = fs.statSync(file, { bigint: true });
+  const originalStat = fs.statSync.bind(fs);
+  vi.spyOn(fs, 'statSync').mockImplementation(((name: fs.PathLike, options?: unknown) =>
+    String(name) === file ? stat : originalStat(name, options as never)) as typeof fs.statSync);
+  vi.spyOn(Date, 'now').mockReturnValue(Number(stat.ctimeNs / 1_000_000n));
+  expect(library.get(track.id)?.id).toBe(track.id);
+  fs.writeFileSync(file, 'changed audio');
+  expect(fs.statSync(file, { bigint: true }).size).toBe(stat.size);
   expect(() => library.get(track.id)).toThrow('校验失败');
 });
 
