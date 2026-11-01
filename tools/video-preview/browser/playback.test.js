@@ -1,7 +1,28 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createAssetQueue, previewSize } from './playback.js';
+import { createAssetQueue, previewSize, placeSceneLabel, routeEmphasis } from './playback.js';
 
 afterEach(() => vi.useRealTimers());
+
+it('keeps the current leg above daily context and older days, then reunites the route for the ending', () => {
+  const events = [
+    { start: 3, segment: { dayIndex: 1 } },
+    { start: 7, segment: { dayIndex: 2 } },
+    { start: 11, segment: { dayIndex: 2 } }
+  ];
+  const style = routeEmphasis(events, 12, 16);
+  expect(style[2].opacity).toBeGreaterThan(style[1].opacity);
+  expect(style[1].opacity).toBeGreaterThan(style[0].opacity);
+  expect(style[2].width).toBeGreaterThan(style[0].width);
+  expect(style.map((item) => item.active)).toEqual([false, false, true]);
+  const ending = routeEmphasis(events, 18, 16);
+  expect(new Set(ending.map((item) => item.opacity)).size).toBe(1);
+  expect(ending.every((item) => !item.active)).toBe(true);
+  // A day boundary fades continuously and an arbitrary seek reproduces its frame.
+  const before = routeEmphasis(events, 7, 16);
+  const after = routeEmphasis(events, 7.001, 16);
+  expect(Math.abs(before[0].opacity - after[0].opacity)).toBeLessThan(0.001);
+  expect(routeEmphasis(events, 12, 16)).toEqual(style);
+});
 
 it('bounds concurrent requests, shares in-flight loads and prioritizes nearby tiles', async () => {
   const starts = [];
@@ -77,4 +98,28 @@ it('uses one quarter of the export pixels for portrait preview without upscaling
   expect(previewSize(1080, 1920)).toEqual([540, 960]);
   expect(previewSize(270, 480)).toEqual([270, 480]);
   expect(previewSize(1920, 1080)).toEqual([540, 304]);
+});
+
+it('keeps destination and transport labels outside the model and within the film safe area', () => {
+  const bounds = { x: 32, y: 350, width: 1016, height: 1190 };
+  const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  for (const model of [
+    { x: 390, y: 790, width: 300, height: 260 },
+    { x: 40, y: 360, width: 260, height: 270 },
+    { x: 770, y: 1200, width: 260, height: 290 }
+  ]) {
+    const anchor = { x: model.x + model.width / 2, y: model.y + model.height };
+    const label = placeSceneLabel(anchor, { width: 360, height: 56 }, { bounds, avoid: [model] });
+    const badge = placeSceneLabel(anchor, { width: 90, height: 64 }, { bounds, avoid: [model, label] });
+    expect(intersects(model, label)).toBe(false);
+    expect(intersects(model, badge)).toBe(false);
+    expect(intersects(label, badge)).toBe(false);
+    for (const item of [label, badge]) {
+      expect(item.x).toBeGreaterThanOrEqual(bounds.x);
+      expect(item.y).toBeGreaterThanOrEqual(bounds.y);
+      expect(item.x + item.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+      expect(item.y + item.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+    }
+    expect(placeSceneLabel(anchor, { width: 360, height: 56 }, { bounds, avoid: [model] })).toEqual(label);
+  }
 });

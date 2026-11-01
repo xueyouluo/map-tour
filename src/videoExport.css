@@ -581,6 +581,16 @@
   transition: width 0.7s ease;
   border-radius: 5px;
 }
+.video-progress-track.is-indeterminate i {
+  animation: video-map-loading 1.5s ease-in-out infinite alternate;
+}
+@keyframes video-map-loading {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(285%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .video-progress-track.is-indeterminate i { animation: none; width: 100% !important; opacity: 0.5; }
+}
 .video-running-panel h3,
 .video-result-panel h3,
 .video-retry-panel h3 {

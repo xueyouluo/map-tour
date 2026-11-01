@@ -1,7 +1,8 @@
-import { selectVehicle, createPublicTransportModels } from './vehicles.js';
+import { selectVehicle, createTravelActors, animateTravelActor, articulateRail, travelProgress } from './vehicles.js';
 import * as THREE from 'three';
-import { createAssetQueue, previewSize } from './playback.js';
+import { createAssetQueue, previewSize, placeSceneLabel, routeEmphasis } from './playback.js';
 
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -130,13 +131,22 @@ renderer.setPixelRatio(1);
 renderer.setClearColor(PAPER, 1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
+// Soft studio reflections reveal curved paint and glass at small on-map sizes.
+const environment = new RoomEnvironment();
+const pmrem = new THREE.PMREMGenerator(renderer);
+const environmentMap = pmrem.fromScene(environment, 0.04);
+scene.environment = environmentMap.texture;
+scene.environmentIntensity = 0.55;
+environment.dispose();
+pmrem.dispose();
+window.addEventListener('pagehide', () => environmentMap.dispose(), { once: true });
 const camera = new THREE.PerspectiveCamera(46, W / H, 0.03, 100000);
-scene.add(new THREE.HemisphereLight(0xffffff, 0xb0c0b3, 2.0));
-const light = new THREE.DirectionalLight(0xfff4d6, 2.8);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8d9c9e, 1.25));
+const light = new THREE.DirectionalLight(0xfff4de, 2.0);
 light.position.set(-25, 65, 25);
 light.castShadow = true;
 light.shadow.mapSize.set(exporting ? 2048 : 1024, exporting ? 2048 : 1024);
@@ -152,6 +162,9 @@ light.shadow.camera.updateProjectionMatrix();
 light.shadow.bias = -0.0002;
 light.shadow.normalBias = 0.04;
 scene.add(light, light.target);
+const fillLight = new THREE.DirectionalLight(0xd4e2ef, 0.6);
+fillLight.position.set(12, 9, -16);
+scene.add(fillLight);
 function setRenderQuality(full) {
   exporting = full;
   const [width, height] = full ? [W, H] : previewSize(W, H);
@@ -420,6 +433,35 @@ function along(segment, p) {
     index: i
   };
 }
+function alongDistance(segment, distance) {
+  if (segment.length < 1e-8) {
+    const point = segment.points[0].clone();
+    point.z -= distance;
+    return point;
+  }
+  if (distance >= 0 && distance <= segment.length) return along(segment, distance / segment.length).point;
+  const atStart = distance < 0;
+  const end = atStart ? segment.points[0] : segment.points.at(-1);
+  const other = atStart ? segment.points[1] : segment.points.at(-2);
+  const tangent = atStart ? other.clone().sub(end) : end.clone().sub(other);
+  return end.clone().addScaledVector(tangent.normalize(), atStart ? distance : distance - segment.length);
+}
+
+function followRailRoute(actor, state) {
+  const rig = actor.userData.rig;
+  if (!rig.coaches) return;
+  const segment = state.event.segment, scale = actor.scale.x, heading = actor.rotation.y;
+  const yaw = new THREE.Vector3(0, 1, 0);
+  const samples = rig.coachOffsets.map(offset => {
+    const distance = state.progress * segment.length - offset * scale;
+    const point = alongDistance(segment, distance).sub(state.position).divideScalar(scale).applyAxisAngle(yaw, -heading);
+    const radius = rig.coachHalfLength * scale * 0.65;
+    const direction = alongDistance(segment, distance + radius).sub(alongDistance(segment, distance - radius));
+    return { x: point.x, y: point.y, z: point.z,
+      heading: Math.atan2(-direction.x, -direction.z) - heading };
+  });
+  articulateRail(actor, samples);
+}
 const events = DATA.events.map((event) => ({
   ...event,
   segment: segments[event.index]
@@ -429,7 +471,7 @@ function stateAt(t) {
   for (const e of events) if (t >= e.start) event = e;
   const vehicle = selectVehicle(event.segment);
   const progress =
-    t < INTRO ? 0 : clamp((t - event.start) / (event.end - event.start));
+    t < INTRO ? 0 : travelProgress(t - event.start, event.end - event.start);
   const position = along(event.segment, progress).point;
   const before = along(event.segment, clamp(progress - 0.009)).point,
     after = along(event.segment, clamp(progress + 0.009)).point;
@@ -488,7 +530,7 @@ for (let i = 0; i <= CAMERA_STEPS; i++) {
     target = state.position.clone().lerp(overview, p * p * p);
     height = Math.exp(mix(Math.log(height), Math.log(DATA.overviewHeight), p));
   }
-  const yaw = 0.22 * Math.sin(state.heading) + 0.15 * Math.sin(t * 0.36);
+  const yaw = 0.16 * Math.sin(state.heading) + 0.075 * Math.sin(t * 0.18);
   cameraFrames.push({ target, height, yaw, heading: state.heading });
 }
 // Symmetric smoothing makes seeks reproducible and anticipates turns without camera resets.
@@ -516,6 +558,23 @@ const smoothFrames = cameraFrames.map((_, i) => {
     heading: Math.atan2(sinHeading, cosHeading)
   };
 });
+const actorHeadings = cameraFrames.map((_, i) => {
+  let x = 0, z = 0;
+  const event = stateAt(i / 60).event;
+  const first = Math.ceil(event.start * 60), last = Math.floor(event.end * 60);
+  for (let j = -10; j <= 10; j++) {
+    const f = cameraFrames[clamp(i + j, first, last)];
+    const weight = Math.exp(-0.5 * (j / 4) ** 2);
+    x += Math.sin(f.heading) * weight;
+    z += Math.cos(f.heading) * weight;
+  }
+  return Math.atan2(x, z);
+});
+function actorHeadingAt(t) {
+  const frame = clamp(t * 60, 0, CAMERA_STEPS), index = Math.floor(frame);
+  const a = actorHeadings[index], b = actorHeadings[Math.min(index + 1, CAMERA_STEPS)];
+  return Math.atan2(mix(Math.sin(a), Math.sin(b), frame - index), mix(Math.cos(a), Math.cos(b), frame - index));
+}
 function camAt(t) {
   const f = clamp(t * 60, 0, CAMERA_STEPS),
     i = Math.floor(f),
@@ -530,14 +589,6 @@ function camAt(t) {
       mix(Math.cos(a.heading), Math.cos(b.heading), f - i)
     )
   };
-}
-function rounded(w, h, d, color, x, y, z, r = 0.09) {
-  const mesh = new THREE.Mesh(
-    new RoundedBoxGeometry(w, h, d, 3, r),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.42, metalness: 0.08 })
-  );
-  mesh.position.set(x, y, z);
-  return mesh;
 }
 function shadow(width, depth) {
   const c = document.createElement('canvas');
@@ -561,118 +612,8 @@ function shadow(width, depth) {
   mesh.position.y = 0.025;
   return mesh;
 }
-const car = new THREE.Group(),
-  body = new THREE.Group(),
-  wheels = [];
-car.add(shadow(3.0, 4.5), body);
-body.add(rounded(1.68, 0.58, 3.3, '#f6bd42', 0, 0.65, 0, 0.18));
-body.add(rounded(1.4, 0.75, 1.65, '#274f60', 0, 1.17, 0.22, 0.2));
-body.add(rounded(1.4, 0.18, 1.1, '#ffcb50', 0, 1.56, 0.27, 0.1));
-body.add(rounded(1.54, 0.14, 0.88, '#ffcf60', 0, 0.98, -1.05, 0.07));
-body.add(rounded(0.95, 0.24, 0.62, '#e6d2a9', 0, 1.78, 0.35, 0.07));
-body.add(rounded(1.02, 0.035, 0.08, '#fff2d9', 0, 1.92, 0.35, 0.015));
-body.add(rounded(0.9, 0.15, 0.07, '#2c4147', 0, 0.48, -1.67, 0.025));
-for (const side of [-1, 1]) {
-  body.add(rounded(0.35, 0.18, 0.1, '#fff9d5', side * 0.5, 0.73, -1.65, 0.035));
-  body.add(
-    rounded(0.34, 0.16, 0.09, '#e26152', side * 0.52, 0.73, 1.65, 0.035)
-  );
-  body.add(
-    rounded(0.18, 0.13, 0.3, '#f1b73b', side * 0.88, 1.02, -0.39, 0.035)
-  );
-  for (const z of [-1.03, 1.03]) {
-    const wheel = new THREE.Group();
-    wheel.position.set(side * 0.84, 0.37, z);
-    const tire = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.36, 0.36, 0.23, 18),
-      new THREE.MeshStandardMaterial({ color: '#263336', roughness: 0.85 })
-    );
-    tire.rotation.z = Math.PI / 2;
-    const hub = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.19, 0.19, 0.25, 18),
-      new THREE.MeshStandardMaterial({
-        color: '#e8e6db',
-        metalness: 0.3,
-        roughness: 0.35
-      })
-    );
-    hub.rotation.z = Math.PI / 2;
-    wheel.add(tire, hub);
-    body.add(wheel);
-    wheels.push(wheel);
-  }
-}
-scene.add(car);
-const walker = new THREE.Group();
-walker.add(shadow(1.5, 1.8));
-const person = new THREE.Group();
-walker.add(person);
-const head = new THREE.Mesh(
-  new THREE.SphereGeometry(0.25, 18, 14),
-  new THREE.MeshStandardMaterial({ color: '#ebbd8e', roughness: 0.7 })
-);
-head.position.set(0, 1.68, 0);
-person.add(head);
-person.add(rounded(0.65, 0.65, 0.4, '#ff8257', 0, 1.15, 0, 0.17));
-person.add(rounded(0.48, 0.48, 0.26, '#b7cc99', 0, 1.19, 0.3, 0.1));
-const hat = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.27, 0.3, 0.13, 20),
-  new THREE.MeshStandardMaterial({ color: '#f8df87' })
-);
-hat.position.set(0, 1.92, 0);
-person.add(hat);
-const limbs = [];
-for (const side of [-1, 1]) {
-  const leg = new THREE.Group();
-  leg.position.set(side * 0.17, 0.87, 0);
-  leg.add(rounded(0.23, 0.65, 0.24, '#354e65', 0, -0.34, 0, 0.07));
-  leg.add(rounded(0.26, 0.16, 0.42, '#fcfaf0', 0, -0.66, -0.08, 0.05));
-  person.add(leg);
-  const arm = new THREE.Group();
-  arm.position.set(side * 0.4, 1.4, 0);
-  arm.add(rounded(0.18, 0.58, 0.2, '#ff936e', 0, -0.27, 0, 0.06));
-  person.add(arm);
-  limbs.push({ side, leg, arm });
-}
-scene.add(walker);
-for (const actor of [car, walker])
-  actor.traverse((object) => {
-    if (object.isMesh) {
-      object.renderOrder = 10;
-      object.castShadow = !object.material.transparent;
-    }
-  });
-const train = new THREE.Group();
-for (let i = 0; i < 2; i++) {
-  const z = i * 4.2;
-  train.add(rounded(1.55, 1.1, 3.9, '#f3f5ee', 0, 0.85, z, 0.3));
-  train.add(rounded(1.58, 0.2, 3.4, '#387a9e', 0, 0.77, z, 0.06));
-  train.add(rounded(1.3, 0.42, 1.3, '#285268', 0, 1.23, z - 1.2, 0.13));
-  for (const side of [-1, 1])
-    for (const dz of [-0.35, 0.3, 0.95])
-      train.add(
-        rounded(0.035, 0.31, 0.48, '#2a576a', side * 0.79, 1.2, z + dz, 0.015)
-      );
-}
-scene.add(train);
-const boat = new THREE.Group();
-boat.add(rounded(1.9, 0.52, 3.8, '#274f60', 0, 0.4, 0, 0.22));
-boat.add(rounded(1.65, 0.3, 3.25, '#f4f1df', 0, 0.79, 0, 0.14));
-boat.add(rounded(1.3, 0.75, 2.2, '#f8f6ea', 0, 1.25, 0.1, 0.12));
-boat.add(rounded(1.35, 0.25, 1.7, '#3388ad', 0, 1.35, -0.18, 0.06));
-boat.add(rounded(1.55, 0.15, 2.3, '#f9cd64', 0, 1.69, 0.12, 0.06));
-scene.add(boat);
-for (const a of [train, boat])
-  a.traverse((o) => {
-    if (o.isMesh) o.renderOrder = 10;
-  });
-const { bus, subway, plane, busWheels } = createPublicTransportModels(
-  THREE,
-  rounded,
-  shadow
-);
-scene.add(bus, subway, plane);
-const actors = { car, walker, train, boat, bus, subway, plane };
+const actors = createTravelActors(THREE, RoundedBoxGeometry, shadow);
+scene.add(...Object.values(actors));
 const city = {
   stats: {
     illustrativeBuildings: 0,
@@ -685,13 +626,13 @@ function makeLine(color, width, opacity = 1, dashed = false) {
   const material = new LineMaterial({
     color,
     linewidth: width,
-    transparent: opacity < 1,
+    transparent: true,
     opacity,
     depthTest: false,
     depthWrite: false,
     dashed,
-    dashSize: 0.2,
-    gapSize: 0.16,
+    dashSize: 14,
+    gapSize: 9,
     alphaToCoverage: false,
     toneMapped: false
   });
@@ -788,6 +729,27 @@ function screen(p, y = 0) {
     visible: v.z > -1 && v.z < 1
   };
 }
+let actorRect = null;
+let overlayLabels = [];
+function projectedModelRect(actor) {
+  if (!actor.visible) return null;
+  const bounds = new THREE.Box3().setFromObject(actor.userData.rig.body), points = [];
+  for (const x of [bounds.min.x, bounds.max.x])
+    for (const y of [bounds.min.y, bounds.max.y])
+      for (const z of [bounds.min.z, bounds.max.z]) points.push(screen(new THREE.Vector3(x, y, z)));
+  if (points.some(point => !point.visible)) return null;
+  const x = Math.min(...points.map(point => point.x)), y = Math.min(...points.map(point => point.y));
+  return { x, y, width: Math.max(...points.map(point => point.x)) - x,
+    height: Math.max(...points.map(point => point.y)) - y };
+}
+function overlayPlacement(anchor, width, height, preferred, kind) {
+  const rect = placeSceneLabel(anchor, { width, height }, {
+    bounds: { x: 32, y: 350, width: 1016, height: 1190 },
+    avoid: [...(actorRect ? [actorRect] : []), ...overlayLabels], preferred
+  });
+  overlayLabels.push({ ...rect, kind });
+  return rect;
+}
 function label(stop, color, filled = false) {
   const p = screen(stop.world, 0.15);
   if (!p.visible || p.x < 45 || p.x > 1035 || p.y < 350 || p.y > 1540) return;
@@ -800,9 +762,19 @@ function label(stop, color, filled = false) {
   let x = clamp(p.x + 27, 32, 1048 - w),
     y = p.y + (above ? 30 : -83);
   if (x < p.x + 19 && x + w > p.x - 19) x = clamp(p.x - w - 27, 32, 1048 - w);
+  ({ x, y } = overlayPlacement(p, w, h, { x, y }, 'place'));
+  const end = { x: clamp(p.x, x, x + w), y: clamp(p.y, y, y + h) };
+  let start = p;
+  if (actorRect && p.x >= actorRect.x && p.x <= actorRect.x + actorRect.width && p.y >= actorRect.y && p.y <= actorRect.y + actorRect.height) {
+    const dx = end.x - p.x, dy = end.y - p.y;
+    const tx = dx ? ((dx > 0 ? actorRect.x + actorRect.width : actorRect.x) - p.x) / dx : Infinity;
+    const ty = dy ? ((dy > 0 ? actorRect.y + actorRect.height : actorRect.y) - p.y) / dy : Infinity;
+    const exit = clamp(Math.min(tx, ty));
+    start = { x: p.x + dx * exit, y: p.y + dy * exit };
+  }
   ctx.beginPath();
-  ctx.moveTo(p.x, p.y);
-  ctx.lineTo(clamp(p.x, x, x + w), clamp(p.y, y, y + h));
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.stroke();
@@ -825,6 +797,7 @@ function shorten(value, maxWidth, size) {
   return result === value ? value : result.slice(0, -1) + '…';
 }
 function paintOverlay(t, state, height) {
+  overlayLabels = [];
   const wide = height > 45,
     headerEnd = wide ? 650 : 365;
   let g = ctx.createLinearGradient(0, 0, 0, headerEnd);
@@ -891,8 +864,9 @@ function paintOverlay(t, state, height) {
     for (const m of areas) {
       const p = screen(new THREE.Vector3(m.cx, heightAt(m.cx, m.cz), m.cz), 1);
       if (p.x > 35 && p.x < 1045 && p.y > 330 && p.y < 1510) {
-        round(p.x - 90, p.y - 60, 180, 58, 16, '#fffffff0');
-        text(shorten(m.label, 160, 30), p.x, p.y - 20, 30, INK, 650, 'center');
+        const badge = overlayPlacement(p, 180, 58, { x: p.x - 90, y: p.y - 60 }, 'city');
+        round(badge.x, badge.y, 180, 58, 16, '#fffffff0');
+        text(shorten(m.label, 160, 30), badge.x + 90, badge.y + 40, 30, INK, 650, 'center');
       }
     }
   } else {
@@ -916,6 +890,9 @@ function paintOverlay(t, state, height) {
   if (state.activity && state.activity.kind !== 'visit') {
     const p = screen(state.position, 0.12);
     p.y -= 115; // Keep the activity badge clear of the destination label.
+    const badge = overlayPlacement(p, 152, 79, { x: p.x - 76, y: p.y - 98 }, 'activity');
+    p.x = badge.x + 76;
+    p.y = badge.y + 98;
     const meal = state.activity.kind === 'meal';
     round(p.x - 76, p.y - 98, 152, 79, 24, '#ffffffed');
     ctx.strokeStyle = '#345c87';
@@ -971,9 +948,10 @@ function paintOverlay(t, state, height) {
       ferry: '乘船路线'
     };
   const activity = state.activity;
-  if (state.flight || state.transit || state.rail) {
+  if ((state.flight || state.transit || state.rail) && (!state.activity || state.activity.kind === 'visit')) {
     const p = screen(state.position, 0.12);
-    round(p.x - 45, p.y - 130, 90, 64, 18, '#ffffffef');
+    const badge = overlayPlacement(p, 90, 64, { x: p.x - 45, y: p.y - 130 }, 'transport');
+    round(badge.x, badge.y, 90, 64, 18, '#ffffffef');
     text(
       state.flight
         ? '✈'
@@ -984,8 +962,8 @@ function paintOverlay(t, state, height) {
             : state.rail
               ? '火车'
               : '换乘',
-      p.x,
-      p.y - 86,
+      badge.x + 45,
+      badge.y + 44,
       28,
       INK,
       650,
@@ -1028,7 +1006,7 @@ function paintOverlay(t, state, height) {
   round(54, 1655, 972, 138, 28, '#fffffff5');
   ctx.restore();
   text(
-    caption,
+    shorten(caption, 920, 26),
     80,
     1700,
     26,
@@ -1087,11 +1065,28 @@ function renderAt(t) {
   const state = stateAt(t),
     cam = camAt(t);
   positionCamera(cam);
-  for (const event of events) {
+  // Express dashes in output pixels rather than fixed metres. A distant overview
+  // must retain readable gaps instead of aliasing into tiny white crossbars.
+  const worldPerPixel = 2 * camera.position.distanceTo(state.position)
+    * Math.tan(camera.fov * Math.PI / 360) / H;
+  const pixelScale = renderer.domElement.height / H;
+  const routeStyles = routeEmphasis(events, t, JOURNEY_END);
+  for (const [index, event] of events.entries()) {
+    const style = routeStyles[index], segment = event.segment;
+    segment.guide.material.opacity = style.guideOpacity;
+    segment.guide.material.linewidth = 3 * pixelScale;
+    segment.trail.material.opacity = style.opacity;
+    segment.trail.material.linewidth = style.width * pixelScale;
+    segment.outline.material.opacity = style.outlineOpacity;
+    segment.outline.material.linewidth = style.outlineWidth * pixelScale;
+    for (const line of [segment.guide, segment.trail, segment.outline])
+      line.material.dashScale = 1 / Math.max(0.0001, worldPerPixel);
+    segment.outline.renderOrder = style.active ? 4 : 2;
+    segment.trail.renderOrder = style.active ? 5 : 3;
     event.segment.guide.visible = t < event.start;
     updateLine(
       event.segment,
-      t < event.start ? 0 : clamp((t - event.start) / (event.end - event.start))
+      t < event.start ? 0 : travelProgress(t - event.start, event.end - event.start)
     );
   }
   const endingScale =
@@ -1104,31 +1099,40 @@ function renderAt(t) {
   const actor = actors[state.vehicle];
   actor.position.copy(state.position);
   actor.position.y += 0.05;
-  actor.rotation.y = cam.heading;
+  actor.rotation.y = actorHeadingAt(t);
   actor.scale.setScalar(
     state.rail
-      ? carScale * 0.6
+      ? carScale * (state.vehicle === 'train' ? 0.46 : 0.5)
       : state.transit
-        ? carScale * 0.76
+        ? carScale * 0.68
         : state.flight
           ? carScale * 0.8
-          : walking
-            ? cam.height * 0.047
-            : carScale
+          : state.ferry
+            ? carScale * 0.9
+            : walking
+              ? cam.height * 0.049 * endingScale
+              : carScale
   );
-  for (const wheel of [...wheels, ...busWheels])
-    wheel.rotation.x = state.moving ? t * 9 : state.event.end * 9;
-  const gait = state.moving ? Math.sin(t * 16) : 0;
-  person.position.y = Math.abs(gait) * 0.055;
-  for (const limb of limbs) {
-    limb.leg.rotation.x = gait * 0.52 * limb.side;
-    limb.arm.rotation.x = -gait * 0.44 * limb.side;
-  }
+  const duration = state.event.end - state.event.start;
+  const travelTime = clamp(t - state.event.start, 0, duration);
+  const beforeHeading = actorHeadingAt(Math.max(state.event.start, t - 0.18));
+  const afterHeading = actorHeadingAt(Math.min(state.event.end, t + 0.18));
+  const turn = Math.atan2(Math.sin(afterHeading - beforeHeading), Math.cos(afterHeading - beforeHeading));
+  animateTravelActor(actor, {
+    time: t,
+    travelTime,
+    travelDuration: duration,
+    moving: state.moving,
+    turn: turn * 2.2,
+    arrival: clamp((travelTime - duration + 0.3) / 0.3)
+  });
+  followRailRoute(actor, state);
   light.position.set(state.position.x - 12, 25, state.position.z + 10);
   light.target.position.copy(state.position);
   light.target.updateMatrixWorld();
   selectHd(cam);
   renderer.render(scene, camera);
+  actorRect = projectedModelRect(actor);
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, W, H);
   ctx.drawImage(renderer.domElement, 0, 0, W, H);
@@ -1178,6 +1182,21 @@ window.followDiagnostics = {
     interDay: e.segment.isInterDay || false
   })),
   city: city.stats,
+  overlays: () => ({ model: actorRect, labels: overlayLabels }),
+  actor: () => {
+    const entry = Object.entries(actors).find(([, actor]) => actor.visible);
+    if (!entry) return null;
+    const [kind, actor] = entry, bounds = new THREE.Box3().setFromObject(actor);
+    const corners = [];
+    for (const x of [bounds.min.x, bounds.max.x])
+      for (const y of [bounds.min.y, bounds.max.y])
+        for (const z of [bounds.min.z, bounds.max.z])
+          corners.push(screen(new THREE.Vector3(x, y, z)));
+    return { kind, heading: actor.rotation.y, corners,
+      coaches: actor.userData.rig.coaches?.map(coach => ({ x: coach.position.x, y: coach.position.y, z: coach.position.z, heading: coach.rotation.y })),
+      calls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles };
+  },
   renderer: renderer.capabilities.maxTextureSize,
   overview: [overview.x, overview.z],
   assets: () => directAssets?.stats() || { source: 'server' },
@@ -1201,7 +1220,7 @@ if (
   PLANNING
 )
   controls.style.display = 'none';
-scrub.max = String(DURATION - 0.01);
+scrub.max = String(DURATION);
 let playing = false,
   current = 0,
   last = 0,
@@ -1221,7 +1240,7 @@ window.__video.play = () => {
 };
 window.__video.setTime = async (t) => {
   window.__video.pause();
-  current = clamp(t, 0, DURATION - 0.001);
+  current = clamp(t, 0, DURATION);
   music.currentTime = current;
   renderPreview(current);
   show();
@@ -1258,6 +1277,7 @@ window.addEventListener(
   true
 );
 button.onclick = () => {
+  if (!playing && current >= DURATION) current = 0;
   playing = !playing;
   button.textContent = playing ? '暂停' : '播放';
   last = performance.now();
@@ -1275,12 +1295,12 @@ function tick(now) {
   if (playing) {
     current += (now - last) / 1000;
     if (current >= DURATION) {
-      current = 0;
+      current = DURATION;
       playing = false;
       music.pause();
       button.textContent = '播放';
     }
-    if (now - lastDraw >= 1000 / 30 - 1) {
+    if (!playing || now - lastDraw >= 1000 / 30 - 1) {
       renderPreview(current);
       lastDraw = now;
       show();

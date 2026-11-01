@@ -177,7 +177,9 @@ function MainApp({ pathname }: { pathname: string }) {
   const [error, setError] = useState('');
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
   const [studioView, setStudioView] = useState<'film' | 'map'>('film');
+  const importDraftKey = 'map-tour:import-draft:' + (user?.id || 'guest');
   const [exportRequest, setExportRequest] = useState(0);
+  const [filmAction, setFilmAction] = useState({ label: '生成旅程预览', disabled: true });
   const [encodingVideo, setEncodingVideo] = useState(false);
   const [activityEdits, setActivityEdits] = useState<ActivityEdits>({});
   const [applyingActivities, setApplyingActivities] = useState(false);
@@ -241,15 +243,20 @@ function MainApp({ pathname }: { pathname: string }) {
         ...result.itinerary,
         shareStatus: 'draft'
       };
+      let savedImport = false;
       try {
         const saved = await saveItinerary(nextItinerary);
         nextItinerary = saved.itinerary;
+        savedImport = true;
       } catch (saveError) {
         setError(
           `草稿保存失败：${saveError instanceof Error ? saveError.message : String(saveError)}`
         );
       }
       setItinerary(nextItinerary);
+      if (savedImport) {
+        try { sessionStorage.removeItem(importDraftKey); } catch { /* The imported trip is already saved. */ }
+      }
       setReadOnly(false);
       void refreshAccount();
       setNewTripOpen(false);
@@ -499,6 +506,7 @@ function MainApp({ pathname }: { pathname: string }) {
           }
         >
           <ImportPanel
+            draftKey={importDraftKey}
             variant="home"
             example={homeExample}
             onParse={handleParse}
@@ -591,7 +599,9 @@ function MainApp({ pathname }: { pathname: string }) {
               </button>
               <button
                 className="studio-export-button"
+                aria-label={filmAction.label}
                 disabled={
+                  filmAction.disabled ||
                   encodingVideo ||
                   isPlanningRoute ||
                   applyingActivities ||
@@ -603,7 +613,7 @@ function MainApp({ pathname }: { pathname: string }) {
                 }}
               >
                 <Film size={15} />
-                {encodingVideo ? '导出中' : '导出视频'}
+                <span>{filmAction.label}</span>
               </button>
             </>
           )}
@@ -660,18 +670,13 @@ function MainApp({ pathname }: { pathname: string }) {
         <PanelHeader readOnly={readOnly} hasItinerary={hasItinerary} />
         {!readOnly &&
           (hasItinerary ? (
-            <details className="import-another">
-              <summary>
-                <PlusIcon /> 导入另一段旅程
-              </summary>
-              <ImportPanel
-                onParse={handleParse}
-                busy={isParsing}
-                progressMessage={isParsing ? parseStatus : ''}
-              />
-            </details>
+            <button className="studio-import-another" disabled={isParsing || encodingVideo}
+              onClick={() => { setError(''); setNewTripOpen(true); }}>
+              <PlusIcon /> 导入另一段旅程
+            </button>
           ) : (
             <ImportPanel
+              draftKey={importDraftKey}
               onParse={handleParse}
               busy={isParsing}
               progressMessage={isParsing ? parseStatus : ''}
@@ -701,8 +706,6 @@ function MainApp({ pathname }: { pathname: string }) {
             onShowRoutesChange={setShowRoutes}
             showMapLabels={showMapLabels}
             onShowMapLabelsChange={setShowMapLabels}
-            onShare={handleShare}
-            isSharing={isSharing}
             selectedStopId={selectedStopId}
             onStopSelect={setSelectedStopId}
             onStopDelete={handleStopDelete}
@@ -749,6 +752,7 @@ function MainApp({ pathname }: { pathname: string }) {
               focusStopId={selectedStopId}
               exportRequest={exportRequest}
               onEncodingChange={setEncodingVideo}
+              onPrimaryActionChange={setFilmAction}
               onEditStop={handleEditStop}
             />
           </div>
@@ -810,7 +814,7 @@ function MainApp({ pathname }: { pathname: string }) {
               <ChapterCover day={day} />
               <span>
                 <small>CHAPTER {String(day.dayIndex).padStart(2, '0')}</small>
-                <strong>{day.stops[0]?.name || day.title}</strong>
+                <strong title={day.title}>{day.title || day.stops[0]?.name}</strong>
                 <em>{day.stops.length} 个地点</em>
               </span>
             </button>
@@ -842,6 +846,7 @@ function MainApp({ pathname }: { pathname: string }) {
               粘贴每日路线，或上传一张行程截图。生成后进入新的行程，当前行程会保留在历史中。
             </p>
             <ImportPanel
+              draftKey={importDraftKey}
               onParse={handleParse}
               busy={isParsing}
               progressMessage={isParsing ? parseStatus : ''}
@@ -1112,8 +1117,6 @@ function ItineraryPanel({
   onShowRoutesChange,
   showMapLabels,
   onShowMapLabelsChange,
-  onShare,
-  isSharing,
   selectedStopId,
   onStopSelect,
   onStopDelete,
@@ -1140,8 +1143,6 @@ function ItineraryPanel({
   onShowRoutesChange: (show: boolean) => void;
   showMapLabels: boolean;
   onShowMapLabelsChange: (show: boolean) => void;
-  onShare: () => void;
-  isSharing: boolean;
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete: (stopId: string) => void;
@@ -1149,7 +1150,6 @@ function ItineraryPanel({
   stopEditingBusy: boolean;
   readOnly: boolean;
 }) {
-  const pendingPoi = hasPendingPoiMatches(itinerary);
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const dayRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const visibleDayKey = visibleDays.map((day) => day.dayIndex).join(',');
@@ -1261,27 +1261,6 @@ function ItineraryPanel({
         )}
       </div>
 
-      {!readOnly && (
-        <div className="share-area">
-          <button
-            className="share-button"
-            type="button"
-            onClick={onShare}
-            disabled={pendingPoi || isSharing}
-          >
-            {isSharing ? (
-              <Loader2 className="spin" size={17} />
-            ) : (
-              <Share2 size={17} />
-            )}
-            {isSharing
-              ? '正在生成链接'
-              : pendingPoi
-                ? '等待地点匹配'
-                : '分享行程'}
-          </button>
-        </div>
-      )}
     </section>
   );
 }
@@ -1662,54 +1641,63 @@ function StopCard({
           )}
         </div>
       )}
-      {stop.arrival?.reason && (
-        <details className="transport-evidence">
-          <summary>
-            交通依据{stop.arrival.source === 'inferred' ? ' · 推断' : ''}
-          </summary>
-          <p>
-            {stop.arrival.fromName ? `从 ${stop.arrival.fromName} 出发。` : ''}
-            {stop.arrival.reason}
-            {typeof stop.arrival.confidence === 'number'
-              ? ` · 置信度 ${Math.round(stop.arrival.confidence * 100)}%`
-              : ''}
-          </p>
-          {stop.arrival.quote && <p>原文：{stop.arrival.quote}</p>}
-          {stop.arrival.steps?.map((step, i) => (
-            <p key={i}>
-              {transportNames[step.mode]} {step.line} {step.fromName} →{' '}
-              {step.toName} {step.note}
-            </p>
-          ))}
-        </details>
-      )}
       {stop.note && <p>{stop.note}</p>}
-      {stop.activity?.quote && (
-        <details className="activity-source">
-          <summary>原文依据</summary>
-          <p>{stop.activity.quote}</p>
-        </details>
-      )}
-      {placeRegionLabel(stop) && <small>{placeRegionLabel(stop)}</small>}
-      {stop.poiMatch?.address && <small>{stop.poiMatch.address}</small>}
       {status === 'unmatched' && (
         <small>
           {stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，请选择准确位置。
         </small>
       )}
-      <button
-        type="button"
-        className="stop-edit-button"
-        disabled={editingBusy}
-        aria-label={`修改地点 ${stop.name}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onEdit(stop.id);
-        }}
-      >
-        <Pencil size={12} />
-        {canFocusMap ? '修改地点' : '确认位置'}
-      </button>
+      <details className="stop-details" onClick={(event) => event.stopPropagation()}>
+        <summary>地点详情与依据</summary>
+        {stop.arrival?.reason && (
+          <div className="transport-evidence">
+            <strong>
+              交通依据{stop.arrival.source === 'inferred' ? ' · 推断' : ''}
+            </strong>
+            <p>
+              {stop.arrival.fromName ? `从 ${stop.arrival.fromName} 出发。` : ''}
+              {stop.arrival.reason}
+              {typeof stop.arrival.confidence === 'number'
+                ? ` · 置信度 ${Math.round(stop.arrival.confidence * 100)}%`
+                : ''}
+            </p>
+            {stop.arrival.quote && <p>原文：{stop.arrival.quote}</p>}
+            {stop.arrival.steps?.map((step, i) => (
+              <p key={i}>
+                {transportNames[step.mode]} {step.line} {step.fromName} →{' '}
+                {step.toName} {step.note}
+              </p>
+            ))}
+          </div>
+        )}
+        {stop.activity?.quote && (
+          <div className="activity-source">
+            <strong>原文依据</strong>
+            <p>{stop.activity.quote}</p>
+          </div>
+        )}
+        {placeRegionLabel(stop) && <small>{placeRegionLabel(stop)}</small>}
+        {stop.poiMatch?.address && <small>{stop.poiMatch.address}</small>}
+        <button
+          type="button"
+          className="stop-edit-button"
+          disabled={editingBusy}
+          aria-label={`修改地点 ${stop.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(stop.id);
+          }}
+        >
+          <Pencil size={12} />
+          {canFocusMap ? '修改地点' : '确认位置'}
+        </button>
+      </details>
+      {!canFocusMap && (
+        <button className="stop-edit-button" type="button" disabled={editingBusy}
+          onClick={(event) => { event.stopPropagation(); onEdit(stop.id); }}>
+          <MapPinned size={12} /> 确认位置
+        </button>
+      )}
     </article>
   );
 }

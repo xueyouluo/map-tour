@@ -221,13 +221,13 @@ it('serves only owner-scoped prepared scene files and uses the same-origin runti
     expect((await fetch(url + `/jobs/${job.id}/scene/plan.json`)).status).toBe(
       404
     );
-    expect(
-      (
-        await fetch(url + `/jobs/${job.id}/scene/vehicles.js`, {
-          headers: { cookie }
-        })
-      ).status
-    ).toBe(200);
+    const vehicles = await fetch(url + `/jobs/${job.id}/scene/vehicles.js`, {
+      headers: { cookie }
+    });
+    expect(vehicles.status).toBe(200);
+    // Prepared scenes must use the matching current film and actor runtime,
+    // even if their stored vehicles.js predates the articulated models.
+    expect(await vehicles.text()).toContain('createTravelActors');
     const runtime = await fetch(url + `/jobs/${job.id}/scene/playback.js`, {
       headers: { cookie }
     });

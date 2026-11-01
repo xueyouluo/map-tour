@@ -426,9 +426,9 @@ export class VideoJobs {
       )
     )
       throw new VideoRequestError('没有找到这个素材。', 404);
-    // Existing prepared previews receive playback fixes without regenerating maps.
+    // Prepared previews use matching playback and model runtimes without new maps.
     // Owner and expiry checks above still apply to every runtime request.
-    const file = ['film.html', 'film.js', 'playback.js'].includes(name)
+    const file = ['film.html', 'film.js', 'playback.js', 'vehicles.js'].includes(name)
       ? path.join(projectRoot, 'tools/video-preview/browser', name)
       : path.join(this.directory(id), 'render', name);
     if (!fs.existsSync(file)) throw new VideoRequestError('素材不可用。', 404);

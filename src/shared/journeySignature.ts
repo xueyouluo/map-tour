@@ -9,6 +9,8 @@ export function journeySignature(
   }
 ): string {
   const text = JSON.stringify({
+    // Keep older downloads in history, but preview/export the current art direction.
+    visualStyleVersion: 3,
     playbackTimingVersion: 2,
     days: itinerary.days.map((day) =>
       day.stops.map((stop) => [

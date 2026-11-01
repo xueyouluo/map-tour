@@ -3,6 +3,7 @@ import { unmatchedRouteStops } from './shared/stopLocations';
 import './stopLocationEditor.css';
 import { useAuth } from './Auth';
 import { journeySignature } from './shared/journeySignature';
+import { playbackClock, playbackMoment } from './shared/videoPlayback';
 import { createExportWatchdog } from './shared/browserExport';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -78,6 +79,7 @@ export function VideoExport({
   focusStopId = null,
   exportRequest = 0,
   onEncodingChange,
+  onPrimaryActionChange,
   onEditStop,
   visible = true
 }: {
@@ -89,6 +91,7 @@ export function VideoExport({
   focusStopId?: string | null;
   exportRequest?: number;
   onEncodingChange?: (encoding: boolean) => void;
+  onPrimaryActionChange?: (action: { label: string; disabled: boolean }) => void;
   onEditStop?: (stopId: string) => void;
   visible?: boolean;
 }) {
@@ -107,6 +110,8 @@ export function VideoExport({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [localId, setLocalId] = useState<string | null>(null);
   const [duration, setDuration] = useState('auto');
+  const [editingSettings, setEditingSettings] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [music, setMusic] = useState<VideoMusicKind>('upbeat');
   const [musicTracks, setMusicTracks] = useState<VideoMusicTrack[]>([]);
   const [trackId, setTrackId] = useState('');
@@ -332,6 +337,11 @@ export function VideoExport({
     onEncodingChange?.(encoding);
   }, [encoding, onEncodingChange]);
   useEffect(() => {
+    if ((visible && open) || encoding) return;
+    (frame.current?.contentWindow as JourneySceneWindow | null)?.__video?.pause();
+    setPlaying(false);
+  }, [visible, open, encoding, sceneReady]);
+  useEffect(() => {
     setPreparedPlan(null);
     setPreviewBackdrop('');
     if (!scene?.sceneUrl) return;
@@ -443,6 +453,8 @@ export function VideoExport({
   }, [scene?.id, open, sceneReload]);
 
   function remember(job: VideoJob) {
+    setEditingSettings(false);
+    setCustomizeOpen(false);
     setJobs((current) => [job, ...current.filter((j) => j.id !== job.id)]);
     setSelectedId(job.id);
     setLocalId(null);
@@ -628,8 +640,17 @@ export function VideoExport({
     }
   }
   function reset() {
-    setSelectedId(null);
-    setLocalId(null);
+    (frame.current?.contentWindow as JourneySceneWindow | null)?.__video?.pause();
+    if (scene) {
+      setDuration(scene.options.durationSeconds ? String(scene.options.durationSeconds) : 'auto');
+      setMusic(scene.options.music);
+      if (scene.options.trackId) setTrackId(scene.options.trackId);
+      if (scene.options.localMusic && scene.options.uploadId)
+        setUpload({ ...scene.options.localMusic, id: scene.options.uploadId, bytes: 0 });
+    }
+    setPlaying(false);
+    setEditingSettings(true);
+    setCustomizeOpen(true);
     setError('');
     setNotice('');
   }
@@ -657,6 +678,9 @@ export function VideoExport({
     (music === 'library' && (!selectedTrack || shortLibraryMusic)) ||
     (music === 'upload' &&
       (!upload || upload.duration < (summary.plan?.duration || 0)));
+  const loadingScene = Boolean(scene && !sceneReady && !sceneLoadError && !encoding);
+  const moment = preparedPlan ? playbackMoment(preparedPlan, time) : null;
+  const ended = Boolean(scene && time >= scene.duration);
   const progress = encoding
     ? encodeProgress.value
     : selected?.kind === 'scene'
@@ -667,13 +691,33 @@ export function VideoExport({
       j.kind !== 'scene' ||
       !localVideos.some((video) => video.sourceSceneId === j.id)
   );
+  const workflowStep = unmatchedStops.length || pendingRouteEdits || planningRoute ? 1
+    : result || (scene && sceneReady && !editingSettings) ? 3 : 2;
+  const primaryLabel = encoding ? '正在导出…'
+    : planningRoute ? '正在确认路线…'
+    : pendingRouteEdits ? '请先更新路线'
+    : unmatchedStops.length ? `确认 ${unmatchedStops.length} 个地点`
+    : editingSettings ? '应用设置并预览'
+    : result ? '下载视频'
+    : sceneLoadError ? '重新加载预览'
+    : scene ? sceneReady ? '导出视频' : '正在加载预览…'
+    : inProgress ? '正在制作…' : '生成旅程预览';
+  const primaryDisabled = encoding || planningRoute || pendingRouteEdits || busy
+    || Boolean(inProgress) || Boolean(scene && !sceneReady && !sceneLoadError && !editingSettings)
+    || Boolean(!result && (!scene || editingSettings) && !unmatchedStops.length && unavailable);
+  useEffect(() => {
+    onPrimaryActionChange?.({ label: primaryLabel, disabled: primaryDisabled });
+  }, [primaryLabel, primaryDisabled, onPrimaryActionChange]);
   useEffect(() => {
     if (!exportRequest || encoding) return;
     setOpen(true);
-    if (result)
+    if (unmatchedStops.length && onEditStop) onEditStop(unmatchedStops[0].id);
+    else if (editingSettings) void create();
+    else if (result)
       dialog.current
         ?.querySelector<HTMLAnchorElement>('a.video-primary')
         ?.click();
+    else if (sceneLoadError) setSceneReload((value) => value + 1);
     else if (scene && sceneReady) void encode();
     else if (!inProgress) void create();
   }, [exportRequest]);
@@ -802,17 +846,17 @@ export function VideoExport({
                         <span>
                           {selected?.state === 'queued'
                             ? `前面还有 ${selected.queuePosition} 个任务`
-                            : `${Math.round(progress)}%`}
+                            : loadingScene ? '正在准备预览' : `${Math.round(progress)}%`}
                         </span>
                         <div
-                          className="video-progress-track"
+                          className={`video-progress-track${loadingScene ? ' is-indeterminate' : ''}`}
                           role="progressbar"
-                          aria-label="视频制作进度"
-                          aria-valuenow={progress}
+                          aria-label={loadingScene ? '地图加载进度' : '视频制作进度'}
+                          aria-valuenow={loadingScene ? undefined : progress}
                           aria-valuemin={0}
                           aria-valuemax={100}
                         >
-                          <i style={{ width: `${Math.max(2, progress)}%` }} />
+                          <i style={{ width: loadingScene ? '35%' : `${Math.max(2, progress)}%` }} />
                         </div>
                         <small>
                           {encoding
@@ -822,19 +866,24 @@ export function VideoExport({
                       </div>
                     )}
                   </div>
-                  <div className="video-format">
-                    <span>9:16 竖屏</span>
-                    <span>1080P 高清</span>
-                    <span>MP4</span>
+                  <div className={`video-format${embedded && scene && moment ? ' studio-playback-context' : ''}`}>
+                    {embedded && scene && moment ? <>
+                      {moment.day && <span>{moment.dayLabel}</span>}
+                      <strong title={moment.label}>{moment.label}</strong>
+                    </> : <>
+                      <span>9:16 竖屏</span>
+                      <span>1080P 高清</span>
+                      <span>MP4</span>
+                    </>}
                   </div>
                   {embedded && !result && !scene && !inProgress && (
                     <button
                       className="studio-preview-start"
-                      disabled={unavailable}
-                      onClick={() => create()}
+                      disabled={primaryDisabled}
+                      onClick={() => unmatchedStops.length && onEditStop ? onEditStop(unmatchedStops[0].id) : create()}
                     >
                       <Play size={15} />
-                      生成本行程预览
+                      {unmatchedStops.length ? '确认沿途地点' : '预览这段旅程'}
                     </button>
                   )}
                   {embedded && scene && (
@@ -842,7 +891,7 @@ export function VideoExport({
                       <button
                         className="video-icon-button"
                         disabled={!sceneReady || encoding}
-                        aria-label={playing ? '暂停影片' : '播放影片'}
+                        aria-label={playing ? '暂停影片' : ended ? '重播影片' : '播放影片'}
                         onClick={() => {
                           const api = (
                             frame.current?.contentWindow as JourneySceneWindow
@@ -851,13 +900,14 @@ export function VideoExport({
                           setPlaying(!playing);
                         }}
                       >
-                        {playing ? <Pause size={18} /> : <Play size={18} />}
+                        {playing ? <Pause size={18} /> : ended ? <RotateCcw size={18} /> : <Play size={18} />}
                       </button>
                       <input
                         type="range"
                         aria-label="影片时间轴"
                         min={0}
-                        max={scene.duration - 0.01}
+                        max={scene.duration}
+                        aria-valuetext={`${playbackClock(time)}，${moment?.label || '旅程预览'}`}
                         step={0.1}
                         value={time}
                         disabled={!sceneReady || encoding}
@@ -871,12 +921,11 @@ export function VideoExport({
                         }}
                       />
                       <span>
-                        {Math.floor(time).toString().padStart(2, '0')} /{' '}
-                        {Math.round(scene.duration)}s
+                        {playbackClock(time)} / {playbackClock(scene.duration)}
                       </span>
                       <button
                         className="studio-mobile-export"
-                        disabled={!sceneReady || encoding || busy}
+                        disabled={!sceneReady || encoding || busy || editingSettings}
                         onClick={encode}
                       >
                         {encoding ? `${Math.round(progress)}%` : exportFailure ? '重试本机导出' : '导出视频'}
@@ -885,16 +934,25 @@ export function VideoExport({
                   )}
                 </div>
                 <div className="video-settings">
+                  <ol className="video-workflow" aria-label="影片制作进度">
+                    {['确认路线', '预览旅程', '导出分享'].map((label, index) => (
+                      <li key={label} className={index + 1 < workflowStep ? 'complete' : index + 1 === workflowStep ? 'current' : ''}
+                        aria-current={index + 1 === workflowStep ? 'step' : undefined}>
+                        <span>{index + 1 < workflowStep ? <Check size={11} /> : index + 1}</span>{label}
+                      </li>
+                    ))}
+                  </ol>
                   <div className="video-settings-heading">
                     <span className="video-eyebrow">YOUR TRIP, IN MOTION</span>
                     <h2 id="video-title">
-                      {result
+                      {editingSettings ? '调整你的影片。' : result
                         ? '旅程，已成片。'
                         : scene
-                          ? '先看看，再出发。'
+                          ? '预览满意，就导出。'
                           : inProgress
                             ? '旅程正在出发。'
-                            : '把足迹，变成故事。'}
+                            : unmatchedStops.length ? '先确认沿途地点。'
+                            : planningRoute ? '正在整理路线。' : '路线就绪，开始预览。'}
                     </h2>
                     <p>{local?.title || selected?.title || itinerary.title}</p>
                   </div>
@@ -915,7 +973,7 @@ export function VideoExport({
                         : '确认位置后计算时长'}
                     </span>
                   </div>
-                  {result ? (
+                  {result && !editingSettings ? (
                     <div className="video-result-panel">
                       <div className="video-complete-symbol">
                         <Check size={24} />
@@ -952,7 +1010,7 @@ export function VideoExport({
                         制作新视频
                       </button>
                     </div>
-                  ) : scene ? (
+                  ) : scene && !editingSettings ? (
                     <div className="browser-preview-panel">
                       <span className="browser-engine-badge">
                         <Check size={13} /> 浏览器实时预览
@@ -974,7 +1032,7 @@ export function VideoExport({
                       <div className="browser-playback">
                         <button
                           className="video-icon-button"
-                          aria-label={playing ? '暂停预览' : '播放预览'}
+                          aria-label={playing ? '暂停预览' : ended ? '重播预览' : '播放预览'}
                           disabled={!sceneReady || encoding}
                           onClick={() => {
                             const api = (
@@ -984,13 +1042,14 @@ export function VideoExport({
                             setPlaying(!playing);
                           }}
                         >
-                          {playing ? <Pause size={18} /> : <Play size={18} />}
+                          {playing ? <Pause size={18} /> : ended ? <RotateCcw size={18} /> : <Play size={18} />}
                         </button>
                         <input
                           type="range"
                           aria-label="预览进度"
                           min={0}
-                          max={scene.duration - 0.01}
+                          max={scene.duration}
+                          aria-valuetext={`${playbackClock(time)}，${moment?.label || '旅程预览'}`}
                           step={0.1}
                           value={time}
                           disabled={!sceneReady || encoding}
@@ -1004,7 +1063,7 @@ export function VideoExport({
                           }}
                         />
                         <span>
-                          {Math.floor(time)} / {Math.round(scene.duration)}s
+                          {playbackClock(time)} / {playbackClock(scene.duration)}
                         </span>
                       </div>
                       <button
@@ -1081,7 +1140,7 @@ export function VideoExport({
                         取消本次制作
                       </button>
                     </div>
-                  ) : selected &&
+                  ) : selected && !editingSettings &&
                     ['failed', 'cancelled'].includes(selected.state) ? (
                     <div className="video-retry-panel">
                       <h3>
@@ -1104,121 +1163,6 @@ export function VideoExport({
                     </div>
                   ) : (
                     <>
-                      <fieldset
-                        className="video-fieldset"
-                        disabled={busy || encoding}
-                      >
-                        <legend>视频时长</legend>
-                        <div className="video-duration-options">
-                          {[
-                            ['auto', '舒缓自动'],
-                            ['30', '30 秒'],
-                            ['60', '60 秒'],
-                            ['90', '90 秒'],
-                            ['120', '120 秒']
-                          ].map(([value, label]) => (
-                            <button
-                              key={value}
-                              disabled={
-                                value !== 'auto' && Number(value) < minDuration
-                              }
-                              className={duration === value ? 'selected' : ''}
-                              aria-pressed={duration === value}
-                              onClick={() => setDuration(value)}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="video-field-hint">
-                          默认放慢移动与镜头节奏，到站多停一会儿。也可以指定时长。
-                        </p>
-                      </fieldset>
-                      <fieldset
-                        className="video-fieldset"
-                        disabled={busy || encoding}
-                      >
-                        <legend>背景音乐</legend>
-                        <div className="video-music-options">
-                          {(
-                            [
-                              [
-                                musicTracks.length ? 'library' : 'upbeat',
-                                musicTracks.length ? '内置音乐' : '原版轻快',
-                                Music2
-                              ],
-                              ['upload', '我的音乐', Upload],
-                              ['none', '无配乐', VolumeX]
-                            ] as const
-                          ).map(([value, label, Icon]) => (
-                            <button
-                              key={value}
-                              className={music === value ? 'selected' : ''}
-                              aria-pressed={music === value}
-                              onClick={() => {
-                                musicTouched.current = true;
-                                setMusic(value);
-                                if (
-                                  value === 'library' &&
-                                  !trackId &&
-                                  musicTracks[0]
-                                )
-                                  setTrackId(musicTracks[0].id);
-                              }}
-                            >
-                              <Icon size={17} />
-                              <span>{label}</span>
-                              {music === value && <Check size={13} />}
-                            </button>
-                          ))}
-                        </div>
-                        {libraryError && (
-                          <p className="video-field-hint" role="status">
-                            {libraryError}
-                          </p>
-                        )}
-                        {music === 'library' && (
-                          <MusicLibraryPicker
-                            tracks={musicTracks}
-                            selectedId={trackId}
-                            onSelect={chooseLibraryTrack}
-                            enabled={visible && open && !busy && !encoding}
-                          />
-                        )}
-                        {music === 'upload' && (
-                          <>
-                            <input
-                              hidden
-                              ref={input}
-                              type="file"
-                              accept="audio/*,.mp3,.m4a,.wav,.ogg"
-                              aria-label="选择背景音乐文件"
-                              onChange={(event) =>
-                                chooseMusic(event.target.files?.[0])
-                              }
-                            />
-                            <button
-                              className="video-upload"
-                              disabled={uploading}
-                              onClick={() => input.current?.click()}
-                            >
-                              <Upload size={17} />
-                              <span>
-                                {uploading
-                                  ? '正在读取音乐…'
-                                  : upload
-                                    ? `${upload.name} · ${Math.floor(upload.duration)} 秒`
-                                    : '选择背景音乐'}
-                                <small>最长 20 分钟，最大 25 MB</small>
-                              </span>
-                            </button>
-                          </>
-                        )}
-                      </fieldset>
-                      <div className="video-feature-note">
-                        <Check size={15} />
-                        <span>浏览器优先生成，需要时手动使用后台制作</span>
-                      </div>
                       {pendingRouteEdits && (
                         <p className="video-notice" role="status">
                           选择已暂存，请先更新路线，再生成视频。
@@ -1259,6 +1203,146 @@ export function VideoExport({
                             </div>
                           </section>
                         )}
+                      <button
+                        className="video-primary"
+                        disabled={unmatchedStops.length && onEditStop ? busy || planningRoute || pendingRouteEdits : unavailable}
+                        onClick={() => unmatchedStops.length && onEditStop ? onEditStop(unmatchedStops[0].id) : create()}
+                      >
+                        {busy ? (
+                          <Loader2 className="spin" size={17} />
+                        ) : (
+                          <Play size={17} />
+                        )}
+                        {busy ? '正在准备…' : unmatchedStops.length ? '确认地点位置' : editingSettings ? '应用设置并预览' : '预览我的旅程'}
+                      </button>
+                      {editingSettings && (scene || result) && (
+                        <button className="video-secondary" disabled={busy} onClick={() => {
+                          setEditingSettings(false); setCustomizeOpen(false);
+                        }}>取消调整，返回预览</button>
+                      )}
+                      <details className="video-customize" open={customizeOpen}
+                        onToggle={(event) => setCustomizeOpen(event.currentTarget.open)}>
+                        <summary>
+                          <span>时长与配乐</span>
+                          <small>{duration === 'auto' ? '自动' : duration + ' 秒'} · {music === 'none' ? '无配乐' : music === 'upload' ? upload?.name || '选择音乐' : selectedTrack?.title || '推荐配乐'}</small>
+                          <ChevronRight size={14} />
+                        </summary>
+                        <fieldset
+                          className="video-fieldset"
+                          disabled={busy || encoding}
+                        >
+                          <legend>视频时长</legend>
+                          <div className="video-duration-options">
+                            {[
+                              ['auto', '舒缓自动'],
+                              ['30', '30 秒'],
+                              ['60', '60 秒'],
+                              ['90', '90 秒'],
+                              ['120', '120 秒']
+                            ].map(([value, label]) => (
+                              <button
+                                key={value}
+                                disabled={
+                                  value !== 'auto' && Number(value) < minDuration
+                                }
+                                className={duration === value ? 'selected' : ''}
+                                aria-pressed={duration === value}
+                                onClick={() => setDuration(value)}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="video-field-hint">
+                            默认放慢移动与镜头节奏，到站多停一会儿。也可以指定时长。
+                          </p>
+                        </fieldset>
+                        <fieldset
+                          className="video-fieldset"
+                          disabled={busy || encoding}
+                        >
+                          <legend>背景音乐</legend>
+                          <div className="video-music-options">
+                            {(
+                              [
+                                [
+                                  musicTracks.length ? 'library' : 'upbeat',
+                                  musicTracks.length ? '内置音乐' : '原版轻快',
+                                  Music2
+                                ],
+                                ['upload', '我的音乐', Upload],
+                                ['none', '无配乐', VolumeX]
+                              ] as const
+                            ).map(([value, label, Icon]) => (
+                              <button
+                                key={value}
+                                className={music === value ? 'selected' : ''}
+                                aria-pressed={music === value}
+                                onClick={() => {
+                                  musicTouched.current = true;
+                                  setMusic(value);
+                                  if (
+                                    value === 'library' &&
+                                    !trackId &&
+                                    musicTracks[0]
+                                  )
+                                    setTrackId(musicTracks[0].id);
+                                }}
+                              >
+                                <Icon size={17} />
+                                <span>{label}</span>
+                                {music === value && <Check size={13} />}
+                              </button>
+                            ))}
+                          </div>
+                          {libraryError && (
+                            <p className="video-field-hint" role="status">
+                              {libraryError}
+                            </p>
+                          )}
+                          {music === 'library' && (
+                            <MusicLibraryPicker
+                              tracks={musicTracks}
+                              selectedId={trackId}
+                              onSelect={chooseLibraryTrack}
+                              enabled={visible && open && customizeOpen && !busy && !encoding}
+                            />
+                          )}
+                          {music === 'upload' && (
+                            <>
+                              <input
+                                hidden
+                                ref={input}
+                                type="file"
+                                accept="audio/*,.mp3,.m4a,.wav,.ogg"
+                                aria-label="选择背景音乐文件"
+                                onChange={(event) =>
+                                  chooseMusic(event.target.files?.[0])
+                                }
+                              />
+                              <button
+                                className="video-upload"
+                                disabled={uploading}
+                                onClick={() => input.current?.click()}
+                              >
+                                <Upload size={17} />
+                                <span>
+                                  {uploading
+                                    ? '正在读取音乐…'
+                                    : upload
+                                      ? `${upload.name} · ${Math.floor(upload.duration)} 秒`
+                                      : '选择背景音乐'}
+                                  <small>最长 20 分钟，最大 25 MB</small>
+                                </span>
+                              </button>
+                            </>
+                          )}
+                        </fieldset>
+                      </details>
+                      <div className="video-feature-note">
+                        <Check size={15} />
+                        <span>自动安排镜头、载具与每日路线，预览后再导出</span>
+                      </div>
                       {!planningRoute &&
                         summary.error &&
                         (!unmatchedStops.length || !onEditStop) && (
@@ -1284,25 +1368,13 @@ export function VideoExport({
                           </ul>
                         </details>
                       )}
-                      <button
-                        className="video-primary"
-                        disabled={unavailable}
-                        onClick={() => create()}
-                      >
-                        {busy ? (
-                          <Loader2 className="spin" size={17} />
-                        ) : (
-                          <Play size={17} />
-                        )}
-                        {busy ? '正在准备…' : '预览我的旅程'}
-                      </button>
-                      <button
-                        className="video-text-action"
-                        disabled={unavailable}
-                        onClick={() => create(true)}
-                      >
-                        直接使用后台制作
-                      </button>
+                      <details className="video-advanced">
+                        <summary>其他制作方式</summary>
+                        <p>本机无法完成时，可以使用后台制作。</p>
+                        <button className="video-text-action" disabled={unavailable} onClick={() => create(true)}>
+                          使用后台制作
+                        </button>
+                      </details>
                       {shortLibraryMusic && (
                         <p className="video-notice" role="status">
                           这首音乐短于视频，请选择其他版本或缩短视频。
@@ -1346,6 +1418,7 @@ export function VideoExport({
                             className="video-history-select"
                             disabled={encoding}
                             onClick={() => {
+                              setEditingSettings(false);
                               setLocalId(item.id);
                               setSelectedId(null);
                               setError('');
@@ -1399,6 +1472,7 @@ export function VideoExport({
                             className="video-history-select"
                             disabled={encoding}
                             onClick={() => {
+                              setEditingSettings(false);
                               setSelectedId(job.id);
                               setLocalId(null);
                               setError('');

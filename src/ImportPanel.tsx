@@ -30,13 +30,15 @@ export function ImportPanel({
   busy,
   progressMessage,
   variant = 'compact',
-  example
+  example,
+  draftKey = 'map-tour:import-draft'
 }: {
   onParse: (text: string, image?: File | null) => void;
   busy: boolean;
   progressMessage: string;
   variant?: 'compact' | 'home';
   example?: ImportExample;
+  draftKey?: string;
 }) {
   const inputId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -46,10 +48,35 @@ export function ImportPanel({
   const [imagePreviewUrl, setImagePreviewUrl] = useState('');
   const [fileError, setFileError] = useState('');
   const home = variant === 'home';
+  const [restoredDraft, setRestoredDraft] = useState(false);
+  const previousDraftKey = useRef(draftKey);
+
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(draftKey);
+      if (saved) { setText(saved); setRestoredDraft(true); }
+      else if (previousDraftKey.current !== draftKey) {
+        // Carry a guest's in-progress import through login; keep accounts separate.
+        if (previousDraftKey.current.endsWith(':guest') && !draftKey.endsWith(':guest') && text)
+          sessionStorage.setItem(draftKey, text);
+        else { setText(''); setRestoredDraft(false); }
+      }
+    } catch { /* Import remains usable when browser storage is unavailable. */ }
+    previousDraftKey.current = draftKey;
+  }, [draftKey]);
+
+  function updateText(value: string) {
+    setText(value);
+    setRestoredDraft(false);
+    try {
+      if (value) sessionStorage.setItem(draftKey, value);
+      else sessionStorage.removeItem(draftKey);
+    } catch { /* The current editor still retains the text. */ }
+  }
 
   useEffect(() => {
     if (!example) return;
-    setText(example.text);
+    updateText(example.text);
     setMode('text');
     setImage(null);
     setFileError('');
@@ -140,7 +167,14 @@ export function ImportPanel({
         disabled={busy}
         hidden={home && mode === 'image'}
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => updateText(event.target.value)}
+        aria-keyshortcuts="Control+Enter Meta+Enter"
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !busy && !fileError && (text.trim() || image)) {
+            event.preventDefault();
+            onParse(text, image);
+          }
+        }}
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={(event) => event.preventDefault()}
@@ -150,6 +184,12 @@ export function ImportPanel({
             : '粘贴文字、Markdown、CSV/TSV 表格，也可以直接粘贴截图...'
         }
       />
+      {restoredDraft && !(home && mode === 'image') && (
+        <div className="import-draft-note" role="status">
+          <span>已恢复上次未完成的文字</span>
+          <button type="button" disabled={busy} onClick={() => updateText('')}>清空草稿</button>
+        </div>
+      )}
       <div
         className={`import-actions ${home && mode === 'image' ? 'home-image-mode' : ''}`}
       >
@@ -255,7 +295,7 @@ export function ImportPanel({
         ) : (
           <Upload size={17} />
         )}
-        {busy ? '正在整理你的旅程' : home ? '生成我的旅程' : '生成地图'}
+        {busy ? '正在整理你的旅程' : home ? '生成我的旅程' : '生成旅程'}
         {home && !busy && <ArrowRight size={17} />}
       </button>
       {busy ? (

@@ -128,7 +128,7 @@ export function AuthControls() {
     );
   return (
     <details className="account-menu">
-      <summary>
+      <summary aria-label={`账户 ${user.displayName}`}>
         <UserRound size={14} />
         <span>{user.displayName}</span>
         <small>

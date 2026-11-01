@@ -1482,3 +1482,21 @@ textarea:focus {
   line-height: 1.7;
   text-align: center;
 }
+
+.import-draft-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 9px;
+  color: #8296b1;
+  font-size: 11px;
+}
+.import-draft-note button {
+  border: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
