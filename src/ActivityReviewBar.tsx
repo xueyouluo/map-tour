@@ -22,7 +22,7 @@ export function ActivityReviewBar({
     >
       <div>
         <strong>已修改 {count} 处</strong>
-        <small>选完后统一更新路线</small>
+        <small>调整完成后统一更新路线</small>
       </div>
       <div className="activity-review-actions">
         <button

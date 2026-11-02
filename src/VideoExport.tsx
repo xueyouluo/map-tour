@@ -519,7 +519,7 @@ export function VideoExport({
   }
   async function encode() {
     const child = frame.current?.contentWindow as JourneySceneWindow | null;
-    if (!scene || !child?.__video || !sceneReady || encoding) return;
+    if (!scene || !child?.__video || !sceneReady || encoding || pendingRouteEdits || planningRoute) return;
     const task = new AbortController();
     controller.current = task;
     handedOff.current = false;
@@ -925,7 +925,7 @@ export function VideoExport({
                       </span>
                       <button
                         className="studio-mobile-export"
-                        disabled={!sceneReady || encoding || busy || editingSettings}
+                        disabled={!sceneReady || encoding || busy || editingSettings || pendingRouteEdits || planningRoute}
                         onClick={encode}
                       >
                         {encoding ? `${Math.round(progress)}%` : exportFailure ? '重试本机导出' : '导出视频'}
@@ -973,6 +973,11 @@ export function VideoExport({
                         : '确认位置后计算时长'}
                     </span>
                   </div>
+                  {pendingRouteEdits && (
+                    <p className="video-notice" role="status">
+                      行程修改已暂存。当前影片仍是原路线，点击“更新路线”应用修改。
+                    </p>
+                  )}
                   {result && !editingSettings ? (
                     <div className="video-result-panel">
                       <div className="video-complete-symbol">
@@ -1068,7 +1073,7 @@ export function VideoExport({
                       </div>
                       <button
                         className="video-primary"
-                        disabled={!sceneReady || encoding || busy}
+                        disabled={!sceneReady || encoding || busy || pendingRouteEdits || planningRoute}
                         onClick={encode}
                       >
                         {encoding ? (
@@ -1163,11 +1168,6 @@ export function VideoExport({
                     </div>
                   ) : (
                     <>
-                      {pendingRouteEdits && (
-                        <p className="video-notice" role="status">
-                          选择已暂存，请先更新路线，再生成视频。
-                        </p>
-                      )}
                       {planningRoute && (
                         <p className="video-notice" role="status">
                           正在匹配地点和规划路线，请稍等片刻。

@@ -19,6 +19,7 @@ import {
 import { getMapOnlyActivities } from './shared/optionalPlaces';
 import { placeRegionLabel } from './shared/placeContext';
 import { journeySignature } from './shared/journeySignature';
+import { applyStopOrderEdits, changedStopOrderCount, stageStopMove, type StopOrderEdits } from './shared/stopOrderEdits';
 import { ActivityOptions } from './ActivityOptions';
 import { transportNames } from './shared/transport';
 import { activityDescription, activitySymbol } from './shared/activities';
@@ -182,11 +183,17 @@ function MainApp({ pathname }: { pathname: string }) {
   const [filmAction, setFilmAction] = useState({ label: '生成旅程预览', disabled: true });
   const [encodingVideo, setEncodingVideo] = useState(false);
   const [activityEdits, setActivityEdits] = useState<ActivityEdits>({});
+  const [stopOrderEdits, setStopOrderEdits] = useState<StopOrderEdits>({});
   const [applyingActivities, setApplyingActivities] = useState(false);
-  const activityChangeCount = Object.keys(activityEdits).length;
-  const activityDraft = useMemo(
+  const activityBase = useMemo(
     () => (itinerary ? applyActivityEdits(itinerary, activityEdits) : null),
     [itinerary, activityEdits]
+  );
+  const routeChangeCount = Object.keys(activityEdits).length
+    + (activityBase ? changedStopOrderCount(activityBase, stopOrderEdits) : 0);
+  const activityDraft = useMemo(
+    () => itinerary && activityBase ? applyStopOrderEdits(itinerary, activityBase, stopOrderEdits) : null,
+    [itinerary, activityBase, stopOrderEdits]
   );
   const mapDraft = useMemo(
     () =>
@@ -201,6 +208,7 @@ function MainApp({ pathname }: { pathname: string }) {
 
   useEffect(() => {
     setActivityEdits({});
+    setStopOrderEdits({});
   }, [itinerary?.id]);
 
   useEffect(() => {
@@ -424,6 +432,11 @@ function MainApp({ pathname }: { pathname: string }) {
     },
     [itinerary, isPlanningRoute, encodingVideo, applyingActivities]
   );
+  const handleStopMove = useCallback((dayIndex: number, stopId: string, direction: -1 | 1) => {
+    if (!activityBase || readOnly || isPlanningRoute || encodingVideo || applyingActivities) return;
+    setStopOrderEdits((edits) => stageStopMove(activityBase, edits, dayIndex, stopId, direction));
+    setSelectedStopId(stopId);
+  }, [activityBase, readOnly, isPlanningRoute, encodingVideo, applyingActivities]);
 
   async function handleApplyActivityChanges() {
     if (!user) {
@@ -436,7 +449,7 @@ function MainApp({ pathname }: { pathname: string }) {
     }
     if (
       !activityDraft ||
-      !activityChangeCount ||
+      !routeChangeCount ||
       isPlanningRoute ||
       applyingActivities ||
       encodingVideo
@@ -461,8 +474,12 @@ function MainApp({ pathname }: { pathname: string }) {
           '',
           '/s/' + encodeURIComponent(saved.itinerary.id)
         );
-      } else handleItineraryChange(activityDraft);
+      } else {
+        const saved = await saveItinerary(activityDraft);
+        setItinerary(saved.itinerary);
+      }
       setActivityEdits({});
+      setStopOrderEdits({});
     } catch (issue) {
       setError(issue instanceof Error ? issue.message : String(issue));
     } finally {
@@ -471,10 +488,11 @@ function MainApp({ pathname }: { pathname: string }) {
   }
   function cancelActivityChanges() {
     setActivityEdits({});
+    setStopOrderEdits({});
     setSelectedStopId(null);
   }
   const activityReview = {
-    count: activityChangeCount,
+    count: routeChangeCount,
     busy: applyingActivities,
     onApply: handleApplyActivityChanges,
     onCancel: cancelActivityChanges
@@ -534,7 +552,7 @@ function MainApp({ pathname }: { pathname: string }) {
 
   return (
     <div
-      className={`app-shell cinema-shell studio-mode-${studioView} ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${effectiveMobileSheetMode}`}
+      className={`app-shell cinema-shell studio-mode-${studioView} ${routeChangeCount ? 'has-pending-route-edits' : ''} ${readOnly ? 'read-only' : ''} ${hasItinerary ? 'has-itinerary' : 'no-itinerary'} mobile-sheet-${effectiveMobileSheetMode}`}
     >
       <header className="studio-header">
         <a className="studio-brand" href="/" aria-label="Map Tour 首页">
@@ -552,6 +570,7 @@ function MainApp({ pathname }: { pathname: string }) {
         <div className="studio-header-actions">
           <button
             className="studio-header-link studio-new-trip"
+            aria-label="新建行程"
             disabled={encodingVideo || isParsing}
             onClick={() => {
               setError('');
@@ -586,13 +605,15 @@ function MainApp({ pathname }: { pathname: string }) {
             <>
               <button
                 className="studio-header-link"
+                aria-label="分享"
                 onClick={() => {
                   if (readOnly) {
                     setShareUrl(location.href);
                     setShareDialogOpen(true);
                   } else void handleShare();
                 }}
-                disabled={isSharing}
+                disabled={isSharing || routeChangeCount > 0 || applyingActivities}
+                title={routeChangeCount ? '先更新路线或撤销修改，再分享行程' : '分享行程'}
               >
                 <Share2 size={15} />
                 <span>分享</span>
@@ -605,7 +626,7 @@ function MainApp({ pathname }: { pathname: string }) {
                   encodingVideo ||
                   isPlanningRoute ||
                   applyingActivities ||
-                  activityChangeCount > 0
+                  routeChangeCount > 0
                 }
                 onClick={() => {
                   setStudioView('film');
@@ -709,6 +730,7 @@ function MainApp({ pathname }: { pathname: string }) {
             selectedStopId={selectedStopId}
             onStopSelect={setSelectedStopId}
             onStopDelete={handleStopDelete}
+            onStopMove={handleStopMove}
             onStopEdit={handleEditStop}
             stopEditingBusy={
               isPlanningRoute || encodingVideo || applyingActivities
@@ -740,7 +762,7 @@ function MainApp({ pathname }: { pathname: string }) {
               }
               itinerary={itinerary}
               planningRoute={isPlanningRoute || applyingActivities}
-              pendingRouteEdits={activityChangeCount > 0}
+              pendingRouteEdits={routeChangeCount > 0}
               embedded
               visible={
                 studioView === 'film' &&
@@ -778,7 +800,7 @@ function MainApp({ pathname }: { pathname: string }) {
             activityBusy={
               isPlanningRoute || encodingVideo || applyingActivities
             }
-            pendingActivityChanges={activityChangeCount > 0}
+            pendingActivityChanges={routeChangeCount > 0}
             visible={!itinerary || studioView === 'map'}
           />
         </div>
@@ -1120,6 +1142,7 @@ function ItineraryPanel({
   selectedStopId,
   onStopSelect,
   onStopDelete,
+  onStopMove,
   onStopEdit,
   stopEditingBusy,
   readOnly,
@@ -1146,6 +1169,7 @@ function ItineraryPanel({
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete: (stopId: string) => void;
+  onStopMove: (dayIndex: number, stopId: string, direction: -1 | 1) => void;
   onStopEdit: (stopId: string) => void;
   stopEditingBusy: boolean;
   readOnly: boolean;
@@ -1235,6 +1259,7 @@ function ItineraryPanel({
               selectedStopId={selectedStopId}
               onStopSelect={onStopSelect}
               onStopDelete={!readOnly ? onStopDelete : undefined}
+              onStopMove={!readOnly ? onStopMove : undefined}
               onStopEdit={onStopEdit}
               stopEditingBusy={stopEditingBusy}
             />
@@ -1460,6 +1485,7 @@ function DaySection({
   selectedStopId,
   onStopSelect,
   onStopDelete,
+  onStopMove,
   onStopEdit,
   stopEditingBusy
 }: {
@@ -1468,6 +1494,7 @@ function DaySection({
   selectedStopId: string | null;
   onStopSelect: (stopId: string) => void;
   onStopDelete?: (stopId: string) => void;
+  onStopMove?: (dayIndex: number, stopId: string, direction: -1 | 1) => void;
   onStopEdit: (stopId: string) => void;
   stopEditingBusy: boolean;
 }) {
@@ -1494,13 +1521,16 @@ function DaySection({
         </div>
       </div>
       <div className="stop-list">
-        {day.stops.map((stop) => (
+        {day.stops.map((stop, index) => (
           <StopCard
             key={stop.id}
             stop={stop}
             selected={selectedStopId === stop.id}
             onSelect={onStopSelect}
             onDelete={onStopDelete}
+            onMove={onStopMove ? (direction) => onStopMove(day.dayIndex, stop.id, direction) : undefined}
+            canMoveUp={index > 0}
+            canMoveDown={index < day.stops.length - 1}
             onEdit={onStopEdit}
             editingBusy={stopEditingBusy}
           />
@@ -1563,6 +1593,9 @@ function StopCard({
   selected,
   onSelect,
   onDelete,
+  onMove,
+  canMoveUp = false,
+  canMoveDown = false,
   onEdit,
   editingBusy
 }: {
@@ -1571,9 +1604,13 @@ function StopCard({
   selected: boolean;
   onSelect: (stopId: string) => void;
   onDelete?: (stopId: string) => void;
+  onMove?: (direction: -1 | 1) => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   onEdit: (stopId: string) => void;
   editingBusy: boolean;
 }) {
+  const [actionsOpen, setActionsOpen] = useState(false);
   const status = stop.poiMatch?.status;
   const isMatched = status === 'matched';
   const canFocusMap = Boolean(stop.poiMatch?.location);
@@ -1611,19 +1648,12 @@ function StopCard({
             <ExternalLink size={15} />
           </a>
         )}
-        {onDelete && (
-          <button
-            className="stop-delete-button"
-            type="button"
-            aria-label={`删除 ${stop.name}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onDelete(stop.id);
-            }}
-          >
-            <Trash2 size={15} />
-          </button>
-        )}
+        <button className="stop-actions-toggle" type="button" aria-label={`调整地点 ${stop.name}`}
+          aria-expanded={actionsOpen} onClick={(event) => {
+            event.stopPropagation(); setActionsOpen((value) => !value);
+          }}>
+          <SlidersHorizontal size={15} />
+        </button>
       </div>
       {(stop.activity || (stop.arrival && stop.arrival.mode !== 'auto')) && (
         <div className="activity-badges">
@@ -1642,6 +1672,26 @@ function StopCard({
         </div>
       )}
       {stop.note && <p>{stop.note}</p>}
+      {actionsOpen && (
+        <div className="stop-actions" role="group" aria-label={`调整 ${stop.name}`}
+          onClick={(event) => event.stopPropagation()}>
+          {onMove && (
+            <div className="stop-move-actions">
+              <button type="button" disabled={editingBusy || !canMoveUp} onClick={() => onMove(-1)}>
+                <ChevronUp size={13} /> 上移一站
+              </button>
+              <button type="button" disabled={editingBusy || !canMoveDown} onClick={() => onMove(1)}>
+                <ChevronDown size={13} /> 下移一站
+              </button>
+            </div>
+          )}
+          <button type="button" disabled={editingBusy} onClick={() => onEdit(stop.id)}>
+            <Pencil size={13} /> {canFocusMap ? '修改地点' : '确认位置'}
+          </button>
+          {onDelete && <button className="stop-remove-action" type="button" disabled={editingBusy}
+            onClick={() => onDelete(stop.id)}><Trash2 size={13} /> 移除地点</button>}
+        </div>
+      )}
       {status === 'unmatched' && (
         <small>
           {stop.poiMatch?.errorInfo || '未匹配到高德 POI'}，请选择准确位置。
