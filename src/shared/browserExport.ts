@@ -1,13 +1,21 @@
 export class BrowserExportError extends Error {
-  constructor(public readonly stage: string, cause: unknown) {
-    const detail = cause instanceof Error ? cause.message : '未知错误';
-    const reason = /fetch|network|load failed|加载失败/i.test(detail)
+  constructor(public readonly stage: string, cause: unknown,
+    public readonly diagnostics?: Record<string, number | boolean>) {
+    // Scene errors originate in an iframe and do not inherit this realm's Error.
+    const message = typeof cause === 'string' ? cause
+      : cause && typeof cause === 'object' && 'message' in cause && typeof cause.message === 'string'
+        ? cause.message : '';
+    const name = cause && typeof cause === 'object' && 'name' in cause && typeof cause.name === 'string'
+      ? cause.name : '';
+    const detail = message || name || '未知错误';
+    const diagnostic = `${name} ${detail}`;
+    const reason = /fetch|network|load failed|加载失败/i.test(diagnostic)
       ? '网络下载中断，请检查网络后重试。'
-      : /超时|timeout/i.test(detail)
+      : /超时|timeout/i.test(diagnostic)
         ? /下载|地图|渲染/.test(stage)
           ? '素材等待超时，请检查网络后重试。'
           : '本机处理超时，请返回此页后重试。'
-        : /encode|encoding|codec/i.test(detail)
+        : /encode|encoding|codec/i.test(diagnostic)
           ? '浏览器编码失败，可以重试或更换浏览器。'
           : detail;
     super(`${stage}未完成：${reason}`, { cause });

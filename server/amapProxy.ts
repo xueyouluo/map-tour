@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { assertMainlandMapRequest } from './serviceRegion';
+import { logServerError } from './diagnostics';
 
 const AMAP_REST_ORIGIN = 'https://restapi.amap.com';
 
@@ -31,12 +32,16 @@ export async function proxyAmapRequest(req: Request, res: Response): Promise<voi
     });
 
     const body = Buffer.from(await upstream.arrayBuffer());
+    if (!upstream.ok) logServerError(new Error(`地图上游返回 HTTP ${upstream.status}`), {
+      operation: 'amap.proxy', path: req.originalUrl.split('?')[0], method: req.method, userId: req.currentUser?.id
+    });
     if (res.destroyed) return;
     res.status(upstream.status);
     const contentType = upstream.headers.get('content-type');
     if (contentType) res.setHeader('content-type', contentType);
     res.send(body);
   } catch (error) {
+    logServerError(error, { operation: 'amap.proxy', path: req.originalUrl.split('?')[0], method: req.method, userId: req.currentUser?.id });
     if (res.destroyed) return;
     const timedOut = error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name);
     res.status(timedOut ? 504 : 502).json({

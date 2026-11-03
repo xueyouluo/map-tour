@@ -23,6 +23,7 @@ import {
 } from './videoJobs';
 import { SettingsStore, settingsRouter } from './settings';
 import { videoRouter } from './videoRoutes';
+import { clientDiagnosticsRouter, logServerError } from './diagnostics';
 import { resolveJourneyMapStyle } from '../src/shared/mapTheme';
 import { SUPPORTED_SERVICE_REGION } from '../src/shared/serviceRegion';
 
@@ -50,6 +51,7 @@ const port = Number(process.env.PORT || 8787);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 
+app.use('/api/diagnostics', express.json({ limit: '16kb' }));
 app.use(express.json({ limit: '2mb' }));
 app.use(
   '/api',
@@ -62,6 +64,7 @@ app.use(
 );
 app.use('/api/auth', authRouter(auth));
 app.use('/api/admin/users', adminUsersRouter(auth));
+app.use('/api/diagnostics', clientDiagnosticsRouter());
 const access = (req: express.Request) => ({
   userId: req.currentUser!.id,
   admin: req.currentUser!.role === 'admin'
@@ -193,6 +196,7 @@ app.post(
       result.itinerary = await store.save(result.itinerary, access(req));
       send({ type: 'result', result });
     } catch (error) {
+      logServerError(error, { operation: 'parse.stream', method: req.method, path: req.path, userId: req.currentUser?.id });
       send({
         type: 'error',
         error:
@@ -225,10 +229,14 @@ if (process.env.NODE_ENV === 'production') {
 app.use(
   (
     error: unknown,
-    _req: express.Request,
+    req: express.Request,
     res: express.Response,
     _next: express.NextFunction
   ) => {
+    if (req.path.startsWith('/api/diagnostics') && error && typeof error === 'object' && 'type' in error) {
+      if (error.type === 'entity.too.large') return res.sendStatus(413);
+      if (error.type === 'entity.parse.failed') return res.sendStatus(400);
+    }
     if (error instanceof multer.MulterError) {
       if (error.code === 'LIMIT_FILE_SIZE') {
         res.status(413).json({
@@ -240,12 +248,11 @@ app.use(
       return;
     }
 
-    if (error instanceof HttpError || error instanceof VideoRequestError)
+    if (error instanceof HttpError || error instanceof VideoRequestError) {
+      if (error.status >= 500) logServerError(error, { method: req.method, path: req.path, userId: req.currentUser?.id });
       return res.status(error.status).json({ error: error.message });
-    console.error(
-      'API request failed:',
-      error instanceof Error ? error.name : 'Unknown error'
-    );
+    }
+    logServerError(error, { method: req.method, path: req.path, userId: req.currentUser?.id });
     res.status(500).json({ error: '服务暂时出了点问题，请稍后重试。' });
   }
 );

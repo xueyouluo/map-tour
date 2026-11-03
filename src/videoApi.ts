@@ -1,4 +1,5 @@
 import type { Itinerary } from './shared/itinerary';
+import { reportClientError } from './clientDiagnostics';
 import type {
   VideoCapabilities,
   VideoExportOptions,
@@ -8,15 +9,20 @@ import type {
 } from './shared/videoExport';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch('/api/video' + url, init);
-  if (response.status === 204) return undefined as T;
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401)
-      window.dispatchEvent(new Event('map-tour:auth-required'));
-    throw new Error(body.error || '请求没有成功，请稍后重试。');
+  try {
+    const response = await fetch('/api/video' + url, init);
+    if (response.status === 204) return undefined as T;
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401)
+        window.dispatchEvent(new Event('map-tour:auth-required'));
+      throw new Error(body.error || '请求没有成功，请稍后重试。');
+    }
+    return body;
+  } catch (error) {
+    reportClientError(error, { operation: 'video.request', stage: `${init?.method || 'GET'} /api/video${url.split('?')[0]}` });
+    throw error;
   }
-  return body;
 }
 export const videoCapabilities = () =>
   request<VideoCapabilities>('/capabilities');

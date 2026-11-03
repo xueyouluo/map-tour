@@ -23,8 +23,12 @@ export function routeEmphasis(events, time, journeyEnd) {
 // Bounded background loading: a slow or missing tile must not stop playback.
 export function createAssetQueue({
   load,
-  concurrency = 2,
-  timeoutMs = 20000,
+  // Direct JSAPI captures share one map surface and each may wait 25 seconds.
+  // Match that serialization here so queued tiles do not spend their deadline
+  // waiting behind other captures. Allow an already running preview capture too.
+  browserCapture = false,
+  concurrency = browserCapture ? 1 : 2,
+  timeoutMs = browserCapture ? 60000 : 20000,
   retryDelayMs = 15000
 }) {
   const pending = new Map();

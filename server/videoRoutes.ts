@@ -1,4 +1,5 @@
 import { HttpError, sameOriginMutation } from './httpSecurity';
+import { logServerError } from './diagnostics';
 import { createHash, randomBytes } from 'node:crypto';
 import express from 'express';
 import multer from 'multer';
@@ -215,20 +216,19 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
   router.use(
     (
       error: unknown,
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       _next: express.NextFunction
     ) => {
-      if (error instanceof VideoRequestError || error instanceof HttpError)
+      if (error instanceof VideoRequestError || error instanceof HttpError) {
+        if (error.status >= 500) logServerError(error, { operation: 'video.request', method: req.method, path: req.path, userId: req.currentUser?.id });
         return res.status(error.status).json({ error: error.message });
+      }
       if (error instanceof multer.MulterError)
         return res
           .status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400)
           .json({ error: '音乐文件不能超过 25 MB，请重新选择。' });
-      console.error(
-        'Video service request failed:',
-        error instanceof Error ? error.name : 'Unknown error'
-      );
+      logServerError(error, { operation: 'video.request', method: req.method, path: req.path, userId: req.currentUser?.id });
       res.status(500).json({ error: '视频服务暂时出了点问题，请稍后重试。' });
     }
   );

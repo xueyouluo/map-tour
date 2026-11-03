@@ -1,4 +1,5 @@
 import { journeySignature } from '../src/shared/journeySignature';
+import { logServerError } from './diagnostics';
 import { assertMainlandItinerary } from './serviceRegion';
 import { HttpError } from './httpSecurity';
 import fs from 'node:fs';
@@ -638,6 +639,8 @@ export class VideoJobs {
       } catch (error) {
         const current = this.record(queued.owner, queued.id);
         const cancelled = controller.signal.aborted && !this.stopping;
+        if (!cancelled) logServerError(error, { operation: 'video.background', sceneId: queued.id,
+          itineraryId: queued.itineraryId, stage: current.stage });
         this.save({
           ...current,
           state: cancelled ? 'cancelled' : 'failed',

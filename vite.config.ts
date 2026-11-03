@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: { __APP_BUILD_ID__: JSON.stringify(process.env.MAP_TOUR_BUILD_ID || new Date().toISOString()) },
     build: {
       manifest: true,
       rollupOptions: {

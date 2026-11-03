@@ -2,12 +2,14 @@ import { musicGainAt } from './shared/musicEnvelope';
 import { browserMusicSource } from './browserMusic';
 import type { VideoJob } from './shared/videoExport';
 import { BrowserExportError, yieldBrowserWork } from './shared/browserExport';
+import { sceneDiagnosticSnapshot } from './clientDiagnostics';
 
 export interface JourneySceneWindow extends Window {
   sampleReady?: boolean;
   sceneError?: string;
+  sceneFailure?: unknown;
   __video?: {
-    seekAsync(t: number): Promise<unknown>;
+    seekAsync(t: number, progress?: (text: string) => void): Promise<unknown>;
     setTime(t: number): Promise<void>;
     pause(): void;
     play(): void;
@@ -179,9 +181,11 @@ export async function renderBrowserVideo(
     const frames = Math.round(job.duration * 30);
     for (let frame = 0; frame < frames; frame++) {
       abortCheck(signal);
-      if (scene.sceneError) throw new Error(scene.sceneError);
+      if (scene.sceneError) throw scene.sceneFailure || new Error(scene.sceneError);
       stage = `渲染第 ${frame + 1}/${frames} 帧`;
-      await abortable(api.seekAsync(frame / 30), signal);
+      await abortable(api.seekAsync(frame / 30, (text) =>
+        progress(3 + (92 * frame) / frames, text)
+      ), signal);
       context.drawImage(original, 0, 0, canvas.width, canvas.height);
       if (frame === Math.min(90, frames - 1))
         cover = await new Promise<Blob | null>((resolve) =>
@@ -208,8 +212,8 @@ export async function renderBrowserVideo(
     return { blob, cover };
   } catch (error) {
     await cancel();
-    if (signal.aborted) throw signal.reason;
-    throw new BrowserExportError(stage, error);
+    if (signal.aborted && signal.reason?.name === 'AbortError') throw signal.reason;
+    throw new BrowserExportError(stage, signal.aborted ? signal.reason : error, sceneDiagnosticSnapshot(scene));
   } finally {
     signal.removeEventListener('abort', cancel);
     canvas.width = canvas.height = 1;

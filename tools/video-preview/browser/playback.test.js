@@ -69,6 +69,39 @@ it('times out a hung download, aborts it and lets following requests complete', 
   await expect(next).resolves.toBe('loaded');
 });
 
+it('allows slow browser map captures and starts their deadlines after queued tiles get a slot', async () => {
+  vi.useFakeTimers();
+  const starts = [];
+  const loader = createAssetQueue({
+    browserCapture: true,
+    load: (key) => new Promise((resolve) => {
+      starts.push(key);
+      setTimeout(() => resolve(key), 24000);
+    })
+  });
+  const result = Promise.all([loader.request('first'), loader.request('second'), loader.request('third')]);
+  await vi.advanceTimersByTimeAsync(21000);
+  expect(starts).toEqual(['first']);
+  await vi.advanceTimersByTimeAsync(51000);
+  await expect(result).resolves.toEqual(['first', 'second', 'third']);
+});
+
+it('still bounds a stuck browser capture and permits a later export retry', async () => {
+  vi.useFakeTimers();
+  let signal;
+  const load = vi.fn((_key, cancellation) => {
+    signal = cancellation;
+    return new Promise(() => {});
+  });
+  const loader = createAssetQueue({ browserCapture: true, load });
+  const failure = loader.request('tile').catch((error) => error);
+  await vi.advanceTimersByTimeAsync(60001);
+  expect((await failure).message).toContain('地图素材加载超时');
+  expect(signal.aborted).toBe(true);
+  load.mockResolvedValueOnce('recovered');
+  await expect(loader.request('tile', 0, true)).resolves.toBe('recovered');
+});
+
 it('backs off failed preview loads but permits an explicit export retry', async () => {
   const load = vi.fn().mockRejectedValueOnce(new Error('offline'))
     .mockResolvedValueOnce('recovered');

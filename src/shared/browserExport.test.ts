@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { BrowserExportError, createExportWatchdog } from './browserExport';
 
 afterEach(() => vi.useRealTimers());
@@ -43,4 +44,24 @@ it('retains the failed stage and cause while explaining actionable network and c
     .toContain('编码第 5/2355 帧未完成：浏览器编码失败');
   expect(new BrowserExportError('检查成片文件', new Error('超时')).message)
     .toContain('本机处理超时');
+});
+
+it('preserves errors from the iframe realm instead of replacing them with an unknown error', () => {
+  const cause = runInNewContext('new Error("高德卫星图加载超时，请检查网络后重试。")');
+  expect(cause).not.toBeInstanceOf(Error);
+  const error = new BrowserExportError('渲染第 395/1185 帧', cause);
+  expect(error.message).toContain('渲染第 395/1185 帧未完成：素材等待超时');
+  expect(error.cause).toBe(cause);
+  expect(new BrowserExportError('渲染第 395/1185 帧',
+    runInNewContext('new Error("地图坐标对齐失败，请重新加载预览。")')).message)
+    .toContain('地图坐标对齐失败');
+});
+
+it('recognizes named browser exceptions and string rejections', () => {
+  expect(new BrowserExportError('编码第 5/1185 帧', {
+    name: 'EncodingError', message: 'The operation failed'
+  }).message).toContain('浏览器编码失败');
+  expect(new BrowserExportError('下载配乐', 'Failed to fetch').message)
+    .toContain('网络下载中断');
+  expect(new BrowserExportError('渲染', null).message).toContain('未知错误');
 });

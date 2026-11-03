@@ -318,6 +318,7 @@ function selectHd(cam) {
 }
 const hdById = new Map();
 const textureStream = createAssetQueue({
+  browserCapture: Boolean(directAssets),
   load: async (id, signal) => {
     const full = id.startsWith('full:');
     const tileId = id.slice(id.indexOf(':') + 1);
@@ -363,13 +364,20 @@ function evictHd() {
       p.mesh.visible = false;
     }
 }
-async function ensureHd(strict = false) {
+async function ensureHd(strict = false, progress) {
   const desired = hdPatches.filter((p) => p.wanted);
   const prefix = strict ? 'full:' : 'preview:';
   textureStream.retain(desired.map((p) => prefix + p.id));
-  const requests = desired.filter((p) => !p.texture || (strict && !p.fullQuality)).map((p) =>
+  let completed = 0;
+  const missing = desired.filter((p) => !p.texture || (strict && !p.fullQuality));
+  const requests = missing.map((p) =>
     textureStream.request(prefix + p.id,
       Math.hypot(p.cx - hdTarget.x, p.cz - hdTarget.y), strict)
+      .then(() => {
+        // A frame can need several serialized captures. Report each completion
+        // so a healthy download does not trip the export's no-progress watchdog.
+        progress?.(`准备当前镜头高清地图 ${++completed}/${missing.length}`);
+      })
   );
   if (strict) await Promise.all(requests);
   else await Promise.allSettled(requests);
@@ -1157,13 +1165,13 @@ function renderAt(t) {
 }
 window.__video = {
   seek: renderAt,
-  seekAsync: async (t) => {
+  seekAsync: async (t, progress) => {
     const epoch = seekEpoch;
     // Calculate visibility without drawing a throwaway frame before loading.
     const cam = camAt(t);
     positionCamera(cam);
     selectHd(cam);
-    await ensureHd(true);
+    await ensureHd(true, progress);
     if (epoch === seekEpoch) return renderAt(t);
   },
   duration: DURATION
@@ -1251,6 +1259,8 @@ window.__video.prepareExport = async (progress) => {
   assetProgress = progress;
   window.__video.pause();
   seekEpoch++;
+  // Do not start obsolete preview captures behind the full-resolution atlases.
+  textureStream.retain([]);
   setRenderQuality(true);
   const epoch = seekEpoch;
   try { await Promise.all(MAPS.map(async (m, i) => {
@@ -1273,6 +1283,7 @@ window.addEventListener(
     if (event.target !== renderer.domElement) return;
     event.preventDefault();
     window.sceneError = '设备图形资源不足';
+    window.sceneFailure = new Error(window.sceneError);
   },
   true
 );

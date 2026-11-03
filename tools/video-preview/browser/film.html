@@ -72,5 +72,10 @@
       }
     }
   </script>
-  <script type="module">import('./film.js').catch((error) => { window.sceneError = error?.message || '场景加载失败'; });</script>
+  <script type="module">
+    const failed = (error) => { window.sceneFailure = error; window.sceneError = error?.message || (typeof error === 'string' ? error : '场景加载失败'); };
+    window.addEventListener('error', (event) => { if (event.error || event.message) failed(event.error || event.message); });
+    window.addEventListener('unhandledrejection', (event) => failed(event.reason));
+    import('./film.js').catch(failed);
+  </script>
 </html>
