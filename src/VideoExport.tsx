@@ -5,7 +5,7 @@ import { useAuth } from './Auth';
 import { journeySignature } from './shared/journeySignature';
 import { playbackClock, playbackMoment } from './shared/videoPlayback';
 import { BrowserExportError, createExportWatchdog } from './shared/browserExport';
-import { reportClientError, sceneDiagnosticSnapshot } from './clientDiagnostics';
+import { createClientAttempt, reportClientEvent, reportClientError, sceneDiagnosticSnapshot } from './clientDiagnostics';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -139,6 +139,7 @@ export function VideoExport({
   const input = useRef<HTMLInputElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const controller = useRef<AbortController>();
+  const exportAttempt = useRef<ReturnType<typeof createClientAttempt>>();
   const exportWatchdog = useRef<ReturnType<typeof createExportWatchdog>>();
   const fallbackLock = useRef(false);
   const handedOff = useRef(false);
@@ -211,8 +212,10 @@ export function VideoExport({
     [localUrls]
   );
   useEffect(
-    () => () =>
-      controller.current?.abort(new DOMException('已取消', 'AbortError')),
+    () => () => {
+      exportAttempt.current?.finish('interrupted', undefined, { stage: '离开工作区' });
+      controller.current?.abort(new DOMException('已取消', 'AbortError'));
+    },
     []
   );
 
@@ -427,12 +430,15 @@ export function VideoExport({
     setPlaying(false);
     setTime(0);
     if (!scene || !open) return;
+    const attempt = createClientAttempt({ operation: 'video.preview', sceneId: scene.id,
+      itineraryId: itinerary.id, stage: '加载立体地图' });
     let lastProgressAt = Date.now();
     let lastProgress = '';
     let hasLoaded = false;
     const timer = setInterval(() => {
       const child = frame.current?.contentWindow as (JourneySceneWindow & { sceneProgress?: string }) | null;
       if (child?.sceneProgress) {
+        attempt.touch({ stage: child.sceneProgress });
         setSceneProgress(child.sceneProgress);
         if (child.sceneProgress !== lastProgress) {
           lastProgress = child.sceneProgress;
@@ -443,19 +449,22 @@ export function VideoExport({
         clearInterval(timer);
         setSceneReady(false);
         setSceneLoadError(child?.sceneError || '预览加载超时，请重新加载预览；也可以手动使用后台制作。');
-        reportClientError(child?.sceneFailure || new Error(child?.sceneError || '预览加载超时'), {
-          operation: 'video.preview', stage: child?.sceneProgress || lastProgress || '加载立体地图',
+        const issue = child?.sceneFailure || new Error(child?.sceneError || '预览加载超时');
+        const context = { stage: child?.sceneProgress || lastProgress || '加载立体地图',
           sceneId: scene.id, itineraryId: itinerary.id,
           scene: sceneDiagnosticSnapshot(child)
-        });
+        };
+        if (hasLoaded) reportClientError(issue, { ...context, operation: 'runtime.error' });
+        else attempt.finish('failed', issue, context);
       } else if (child?.sampleReady && child.__video) {
+        if (!hasLoaded) attempt.finish('succeeded', undefined, { stage: '预览就绪', scene: sceneDiagnosticSnapshot(child) });
         hasLoaded = true;
         setSceneReady(true);
         setTime(child.__video.getTime());
         setPlaying(child.__video.isPlaying());
       }
     }, 300);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); attempt.finish('interrupted'); };
   }, [scene?.id, open, sceneReload]);
 
   function remember(job: VideoJob) {
@@ -469,6 +478,7 @@ export function VideoExport({
   async function fallback(job: VideoJob, message: string) {
     if (fallbackLock.current) return;
     fallbackLock.current = true;
+    const attempt = createClientAttempt({ operation: 'video.fallback', sceneId: job.id, itineraryId: itinerary.id });
     handedOff.current = true;
     controller.current?.abort(new DOMException('已转入后台', 'AbortError'));
     setBusy(true);
@@ -482,7 +492,9 @@ export function VideoExport({
         uploadId = (await uploadVideoMusic(file)).upload.id;
       }
       remember((await fallbackVideoJob(job.id, uploadId)).job);
+      attempt.finish('succeeded');
     } catch (issue) {
+      attempt.finish('failed', issue);
       setError(
         issue instanceof Error ? issue.message : '后台制作暂不可用，请重试。'
       );
@@ -527,8 +539,10 @@ export function VideoExport({
     const child = frame.current?.contentWindow as JourneySceneWindow | null;
     if (!scene || !child?.__video || !sceneReady || encoding || pendingRouteEdits || planningRoute) return;
     const task = new AbortController();
-    const attemptId = crypto.randomUUID();
-    const startedAt = performance.now();
+    const attempt = createClientAttempt({ operation: 'video.export', sceneId: scene.id, itineraryId: itinerary.id,
+      details: { durationSeconds: scene.duration, music: scene.options.music } });
+    exportAttempt.current = attempt;
+    const attemptId = attempt.attemptId;
     let latestProgress = { value: 0, text: '准备本机导出' };
     controller.current = task;
     handedOff.current = false;
@@ -553,6 +567,7 @@ export function VideoExport({
         task.signal,
         (value, text) => {
           latestProgress = { value, text };
+          attempt.touch({ progress: value, stage: text });
           watchdog.touch();
           setEncodeProgress({ value, text });
         }
@@ -568,25 +583,28 @@ export function VideoExport({
         musicName: scene.musicName,
         createdAt: new Date().toISOString()
       };
+      let storage = 'saved';
       try {
         await saveLocalVideo(video);
         setLocalVideos(await listLocalVideos(itinerary.id));
       } catch (issue) {
-        reportClientError(issue, { operation: 'video.export', stage: '保存本机视频',
+        storage = 'memory';
+        reportClientError(issue, { operation: 'video.storage', stage: '保存本机视频',
           sceneId: scene.id, itineraryId: itinerary.id, attemptId });
         setLocalVideos((rows) => [video, ...rows]);
         setNotice('浏览器存储空间不足，请立即下载；关闭页面后可能无法找回。');
       }
+      attempt.finish('succeeded', undefined, { stage: '成片验证通过', progress: 100,
+        details: { bytes: media.blob.size, durationSeconds: scene.duration, width: 1080, height: 1920, music: scene.options.music, storage } });
       setLocalId(video.id);
       setSelectedId(null);
       setEncodeProgress({ value: 100, text: '制作完成' });
     } catch (issue) {
       if (!(issue instanceof DOMException && issue.name === 'AbortError')) {
-        reportClientError(issue, {
-          operation: 'video.export',
+        attempt.finish('failed', issue, {
           stage: issue instanceof BrowserExportError ? issue.stage : latestProgress.text,
           sceneId: scene.id, itineraryId: itinerary.id, attemptId,
-          elapsedMs: Math.round(performance.now() - startedAt), progress: latestProgress.value,
+          progress: latestProgress.value,
           scene: issue instanceof BrowserExportError ? issue.diagnostics : sceneDiagnosticSnapshot(child)
         });
         const message = issue instanceof Error ? issue.message : '本机导出失败，请重试。';
@@ -597,14 +615,17 @@ export function VideoExport({
           }));
         } catch { /* The error remains visible if session storage is unavailable. */ }
       }
-      else if (!handedOff.current)
-        setNotice('已取消本机导出，可以继续预览或重新导出。');
+      else {
+        attempt.finish('cancelled', undefined, { stage: handedOff.current ? '转入后台' : '用户取消' });
+        if (!handedOff.current) setNotice('已取消本机导出，可以继续预览或重新导出。');
+      }
     } finally {
       watchdog.stop();
       exportWatchdog.current = undefined;
       setNotice((current) => current === '正在后台继续本机导出，返回此标签页可加快速度。' ? '' : current);
       setEncoding(false);
       controller.current = undefined;
+      exportAttempt.current = undefined;
     }
   }
   async function action(kind: 'cancel' | 'retry' | 'delete', job: VideoJob) {
@@ -1010,6 +1031,9 @@ export function VideoExport({
                       </p>
                       <a
                         className="video-primary"
+                        onClick={() => reportClientEvent({ operation: 'video.download', itineraryId: itinerary.id,
+                          sceneId: local?.sourceSceneId || selected?.id,
+                          details: { bytes: local?.blob.size || selected?.bytes } }, 'clicked')}
                         href={localUrls?.video || selected?.downloadUrl}
                         download={`${local?.title || selected?.title || '旅程视频'}.mp4`}
                       >

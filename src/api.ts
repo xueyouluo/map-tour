@@ -94,9 +94,10 @@ export async function parseItineraryStream(
 }
 
 export async function saveItinerary(
-  itinerary: Itinerary
+  itinerary: Itinerary,
+  action?: 'share'
 ): Promise<{ itinerary: Itinerary; shareUrl: string }> {
-  return fetchJson('/api/itineraries', {
+  return fetchJson('/api/itineraries' + (action === 'share' ? '?action=share' : ''), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(itinerary)
@@ -104,9 +105,10 @@ export async function saveItinerary(
 }
 
 export async function loadItinerary(
-  id: string
+  id: string,
+  sharedView = false
 ): Promise<{ itinerary: Itinerary; editable?: boolean }> {
-  return fetchJson(`/api/itineraries/${encodeURIComponent(id)}`);
+  return fetchJson(`/api/itineraries/${encodeURIComponent(id)}${sharedView ? '?view=share' : ''}`);
 }
 
 export async function listItineraries(

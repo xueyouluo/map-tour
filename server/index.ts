@@ -6,7 +6,7 @@ import {
   loadSession,
   requireUser
 } from './authRoutes';
-import { HttpError, sameOriginMutation } from './httpSecurity';
+import { HttpError, QuotaExceededError, sameOriginMutation } from './httpSecurity';
 import { inferJourneyTransport } from './transportParser';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -23,7 +23,8 @@ import {
 } from './videoJobs';
 import { SettingsStore, settingsRouter } from './settings';
 import { videoRouter } from './videoRoutes';
-import { clientDiagnosticsRouter, logServerError } from './diagnostics';
+import { analyticsReportRouter, clientDiagnosticsRouter, logServerError } from './diagnostics';
+import { AnalyticsStore, recordServerEvent, serverAttempt, useAnalyticsStore } from './analytics';
 import { resolveJourneyMapStyle } from '../src/shared/mapTheme';
 import { SUPPORTED_SERVICE_REGION } from '../src/shared/serviceRegion';
 
@@ -32,6 +33,8 @@ const serviceSettings = new SettingsStore();
 serviceSettings.load();
 
 const auth = new AuthStore();
+const analytics = new AnalyticsStore();
+useAnalyticsStore(analytics);
 const app = express();
 app.set('trust proxy', 'loopback');
 const maxImageBytes = 8 * 1024 * 1024;
@@ -64,7 +67,8 @@ app.use(
 );
 app.use('/api/auth', authRouter(auth));
 app.use('/api/admin/users', adminUsersRouter(auth));
-app.use('/api/diagnostics', clientDiagnosticsRouter());
+app.use('/api/diagnostics', clientDiagnosticsRouter(undefined, analytics));
+app.use('/api/admin/reports', analyticsReportRouter(analytics));
 const access = (req: express.Request) => ({
   userId: req.currentUser!.id,
   admin: req.currentUser!.role === 'admin'
@@ -72,9 +76,7 @@ const access = (req: express.Request) => ({
 const checkQuota: express.RequestHandler = (req, res, next) => {
   const user = req.currentUser!;
   if (user.role !== 'admin' && user.itineraryCount >= user.itineraryLimit)
-    return res
-      .status(403)
-      .json({ error: '行程额度已用完，可以继续编辑和导出已有行程。' });
+    return next(new QuotaExceededError());
   next();
 };
 const videoJobs = new VideoJobs();
@@ -134,6 +136,8 @@ app.post(
   checkQuota,
   upload.single('image'),
   async (req, res, next) => {
+    const attempt = serverAttempt({ operation: 'itinerary.parse', userId: req.currentUser!.id,
+      details: { inputKind: req.file ? 'image' : 'text' } });
     try {
       const file = req.file;
       const result = await parseItinerary({
@@ -146,8 +150,10 @@ app.post(
           : undefined
       });
       result.itinerary = await store.save(result.itinerary, access(req));
+      attempt.finish('succeeded', undefined, { itineraryId: result.itinerary.id });
       res.json(result);
     } catch (error) {
+      attempt.finish(error instanceof QuotaExceededError ? 'blocked' : 'failed', error instanceof QuotaExceededError ? undefined : error);
       next(error);
     }
   }
@@ -160,6 +166,8 @@ app.post(
   checkQuota,
   upload.single('image'),
   async (req, res) => {
+    const attempt = serverAttempt({ operation: 'itinerary.parse', userId: req.currentUser!.id,
+      details: { inputKind: req.file ? 'image' : 'text' } });
     res.status(200);
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -194,8 +202,13 @@ app.post(
         }
       );
       result.itinerary = await store.save(result.itinerary, access(req));
+      attempt.finish('succeeded', undefined, { itineraryId: result.itinerary.id });
       send({ type: 'result', result });
     } catch (error) {
+      attempt.finish(error instanceof QuotaExceededError ? 'blocked' : 'failed', error instanceof QuotaExceededError ? undefined : error);
+      if (error instanceof QuotaExceededError)
+        recordServerEvent({ operation: 'quota.blocked', status: 'blocked', userId: req.currentUser?.id,
+          userAgent: req.get('user-agent'), stage: '服务端额度检查', details: { action: 'parse', reason: 'limit_reached' } });
       logServerError(error, { operation: 'parse.stream', method: req.method, path: req.path, userId: req.currentUser?.id });
       send({
         type: 'error',
@@ -248,6 +261,10 @@ app.use(
       return;
     }
 
+    if (error instanceof QuotaExceededError)
+      recordServerEvent({ operation: 'quota.blocked', status: 'blocked', userId: req.currentUser?.id,
+        userAgent: req.get('user-agent'), stage: '服务端额度检查',
+        details: { action: req.path.startsWith('/api/parse') ? 'parse' : 'save', reason: 'limit_reached' } });
     if (error instanceof HttpError || error instanceof VideoRequestError) {
       if (error.status >= 500) logServerError(error, { method: req.method, path: req.path, userId: req.currentUser?.id });
       return res.status(error.status).json({ error: error.message });
@@ -269,6 +286,8 @@ async function shutdown() {
   await videoJobs.close();
   store.close();
   auth.close();
+  useAnalyticsStore(undefined);
+  analytics.close();
   process.exit(0);
 }
 process.once('SIGTERM', shutdown);

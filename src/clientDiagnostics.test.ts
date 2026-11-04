@@ -69,3 +69,61 @@ it('installs runtime handlers once and captures global errors, rejections and on
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   expect(JSON.parse(fetcher.mock.calls[1][1].body).operation).toBe('runtime.rejection');
 });
+
+it('reports start, progress heartbeat and one terminal success for the same attempt', async () => {
+  vi.useFakeTimers();
+  try {
+    const { createClientAttempt, flushClientDiagnostics } = await import('./clientDiagnostics');
+    const attempt = createClientAttempt({ operation: 'video.export', sceneId: 'scene-1' });
+    await flushClientDiagnostics();
+    attempt.touch({ stage: '渲染第 100/1185 帧', progress: 8 });
+    await vi.advanceTimersByTimeAsync(30000);
+    attempt.finish('succeeded', undefined, { details: { bytes: 2048 } });
+    attempt.finish('failed', new Error('late failure'));
+    await vi.advanceTimersByTimeAsync(60000);
+    const events = fetcher.mock.calls.map(call => JSON.parse(call[1].body));
+    expect(events.map(event => event.status)).toEqual(['started', 'heartbeat', 'succeeded']);
+    expect(new Set(events.map(event => event.attemptId)).size).toBe(1);
+    expect(events[1]).toMatchObject({ stage: '渲染第 100/1185 帧', progress: 8 });
+    expect(events[2]).toMatchObject({ elapsedMs: 30000, details: { bytes: 2048 } });
+  } finally { vi.useRealTimers(); }
+});
+
+it('reports cancellation separately and closes unfinished work on pagehide', async () => {
+  const { createClientAttempt, flushClientDiagnostics } = await import('./clientDiagnostics');
+  const cancelled = createClientAttempt({ operation: 'video.export' });
+  cancelled.finish('cancelled');
+  const interrupted = createClientAttempt({ operation: 'video.preview' });
+  target.dispatchEvent(new Event('pagehide'));
+  interrupted.finish('succeeded');
+  await new Promise(resolve => setImmediate(resolve)); await flushClientDiagnostics();
+  const events = fetcher.mock.calls.map(call => JSON.parse(call[1].body));
+  expect(events.map(event => event.status)).toEqual(['started', 'cancelled', 'started', 'interrupted']);
+});
+
+it('persists offline events for the same account and automatically retries transient delivery failures', async () => {
+  vi.useFakeTimers();
+  const saved = new Map<string, string>();
+  vi.stubGlobal('sessionStorage', { getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value) });
+  vi.stubGlobal('navigator', { onLine: false });
+  try {
+    const first = await import('./clientDiagnostics');
+    first.setDiagnosticsUser('alice');
+    first.reportClientEvent({ operation: 'video.download' }, 'clicked');
+    const eventId = JSON.parse(saved.get('map-tour:events:alice')!)[0].eventId;
+    vi.resetModules();
+    const restored = await import('./clientDiagnostics');
+    restored.installClientDiagnostics(); restored.setDiagnosticsUser('bob');
+    vi.stubGlobal('navigator', { onLine: true });
+    await restored.flushClientDiagnostics();
+    expect(fetcher).not.toHaveBeenCalled();
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    restored.setDiagnosticsUser('alice');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).eventId).toBe(eventId);
+    expect(JSON.parse(saved.get('map-tour:events:alice')!)).toEqual([]);
+  } finally { vi.useRealTimers(); }
+});

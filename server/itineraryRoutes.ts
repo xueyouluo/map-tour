@@ -1,6 +1,7 @@
 import express from 'express';
 import { requireUser } from './authRoutes';
-import { sameOriginMutation } from './httpSecurity';
+import { QuotaExceededError, sameOriginMutation } from './httpSecurity';
+import { serverAttempt } from './analytics';
 import { ItineraryStore } from './storage';
 import type { Itinerary } from '../src/shared/itinerary';
 export function itineraryRouter(store: ItineraryStore) {
@@ -10,20 +11,26 @@ export function itineraryRouter(store: ItineraryStore) {
     admin: req.currentUser!.role === 'admin'
   });
   router.post('/', requireUser, sameOriginMutation, async (req, res, next) => {
+    const attempt = serverAttempt({ operation: req.query.action === 'share' ? 'share.publish' : 'itinerary.save',
+      userId: req.currentUser!.id, userAgent: req.get('user-agent') });
     try {
       const itinerary = req.body as Itinerary;
       if (
         !itinerary?.days ||
         !Array.isArray(itinerary.days) ||
         typeof itinerary.id !== 'string' ||
-        itinerary.id.length > 120
+        itinerary.id.length > 120 ||
+        (req.query.action === 'share' && itinerary.shareStatus !== 'shared')
       ) {
+        attempt.finish('failed', new Error('行程数据不正确'));
         res.status(400).json({ error: '行程数据不正确。' });
         return;
       }
       const record = await store.save(itinerary, access(req));
+      attempt.finish('succeeded', undefined, { itineraryId: record.id });
       res.json({ itinerary: record, shareUrl: '/s/' + record.id });
     } catch (error) {
+      attempt.finish(error instanceof QuotaExceededError ? 'blocked' : 'failed', error instanceof QuotaExceededError ? undefined : error);
       next(error);
     }
   });
@@ -53,17 +60,23 @@ export function itineraryRouter(store: ItineraryStore) {
     } catch (error) { next(error); }
   });
   router.get('/:id', async (req, res, next) => {
+    const attempt = req.query.view === 'share' && req.method === 'GET' ? serverAttempt({ operation: 'share.open',
+      userId: req.currentUser?.id, userAgent: req.get('user-agent'),
+      details: { audience: req.currentUser ? 'signed_in' : 'anonymous' } }) : undefined;
     try {
       const record = await store.getAccessible(
         req.params.id,
         req.currentUser ? access(req) : undefined
       );
       if (!record) {
+        attempt?.finish('failed', new Error('分享行程不存在或无权访问'));
         res.status(404).json({ error: '没有找到这个行程，或你没有查看权限。' });
         return;
       }
+      attempt?.finish('succeeded', undefined, { itineraryId: record.itinerary.id });
       res.json(record);
     } catch (error) {
+      attempt?.finish('failed', new Error('分享行程读取失败'));
       next(error);
     }
   });

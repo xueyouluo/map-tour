@@ -1,5 +1,6 @@
 import { HttpError, sameOriginMutation } from './httpSecurity';
 import { logServerError } from './diagnostics';
+import { serverAttempt } from './analytics';
 import { createHash, randomBytes } from 'node:crypto';
 import express from 'express';
 import multer from 'multer';
@@ -93,21 +94,16 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
     })
   );
   router.post('/scenes', (req, res) => {
-    assertMainlandItinerary(req.body?.itinerary);
-    const capability = available();
-    if (!capability.available)
-      throw new VideoRequestError(
-        capability.reason || '地图素材服务暂不可用。',
-        503
-      );
-    res.status(202).json({
-      job: jobs.create(
-        owner(req),
-        req.body.itinerary,
-        req.body.options,
-        'scene'
-      )
-    });
+    const attempt = serverAttempt({ operation: 'video.scene', userId: req.currentUser?.id });
+    try {
+      assertMainlandItinerary(req.body?.itinerary);
+      const capability = available();
+      if (!capability.available)
+        throw new VideoRequestError(capability.reason || '地图素材服务暂不可用。', 503);
+      const job = jobs.create(owner(req), req.body.itinerary, req.body.options, 'scene', req.currentUser?.id);
+      attempt.finish('succeeded', undefined, { sceneId: job.id, itineraryId: job.itineraryId, stage: '场景入口已创建' });
+      res.status(202).json({ job });
+    } catch (error) { attempt.finish('failed', error); throw error; }
   });
   router.get<{ id: string; '0': string }>('/jobs/:id/scene/*', async (req, res, next) => {
     try {
@@ -152,7 +148,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
   router.post('/jobs/:id/fallback', (req, res) => {
     if (!available().available || available().backgroundAvailable === false)
       throw new VideoRequestError('后台制作暂不可用，请稍后重试。', 503);
-    res.status(202).json({ job: jobs.fallback(owner(req), req.params.id, req.body?.uploadId) });
+    res.status(202).json({ job: jobs.fallback(owner(req), req.params.id, req.body?.uploadId, req.currentUser?.id) });
   });
   router.get('/jobs', (req, res) =>
     res.json({
@@ -175,7 +171,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
         capability.reason || '后台制作暂不可用，请使用本机导出。',
         503
       );
-    const job = jobs.create(owner(req), req.body.itinerary, req.body.options);
+    const job = jobs.create(owner(req), req.body.itinerary, req.body.options, undefined, req.currentUser?.id);
     res.status(202).json({ job });
   });
   router.post('/jobs/:id/cancel', (req, res) =>
@@ -188,7 +184,7 @@ export function videoRouter(jobs: VideoJobs, authenticated = false) {
         capability.reason || '后台制作暂不可用，请使用本机导出。',
         503
       );
-    res.status(202).json({ job: jobs.retry(owner(req), req.params.id) });
+    res.status(202).json({ job: jobs.retry(owner(req), req.params.id, req.currentUser?.id) });
   });
   router.delete('/jobs/:id', (req, res) => {
     jobs.remove(owner(req), req.params.id);

@@ -1,6 +1,7 @@
 import express from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { AuthStore } from './authStore';
+import { serverAttempt } from './analytics';
 import {
   HttpError,
   isDirectLocalRequest,
@@ -101,15 +102,32 @@ export function authRouter(store: AuthStore) {
       return res.status(403).json({ error: '请通过 HTTPS 访问账号服务。' });
     next();
   });
+  const trackedAuth = (operation: 'auth.register' | 'auth.login',
+    handler: (req: express.Request, res: express.Response) => Promise<UserAccount>) =>
+    asyncRoute(async (req, res) => {
+      const attempt = serverAttempt({ operation, userAgent: req.get('user-agent') });
+      try {
+        const user = await handler(req, res);
+        attempt.finish('succeeded', undefined, { userId: user.id });
+      } catch (error) {
+        const status = error instanceof HttpError ? error.status : 500;
+        const reason = status === 429 ? 'rate_limited' : status === 403 ? 'registration_closed'
+          : status === 401 ? 'invalid_credentials' : status === 409 ? 'already_exists' : status === 400 ? 'invalid_input' : 'service_error';
+        attempt.finish(status === 403 || status === 429 ? 'blocked' : 'failed',
+          status === 403 || status === 429 ? undefined : new Error(reason), { details: { reason } });
+        throw error;
+      }
+    });
   router.post(
     '/register',
-    asyncRoute(async (req, res) => {
+    trackedAuth('auth.register', async (req, res) => {
       if (process.env.USER_REGISTRATION_ENABLED === 'false')
         throw new HttpError(403, '暂未开放新用户注册。');
       store.rateLimit('register:' + req.ip, 10, 3600000);
       const user = await store.create(req.body);
       setSession(store, user, req, res);
       res.status(201).json({ user });
+      return user;
     })
   );
   router.post(
@@ -128,7 +146,7 @@ export function authRouter(store: AuthStore) {
   );
   router.post(
     '/login',
-    asyncRoute(async (req, res) => {
+    trackedAuth('auth.login', async (req, res) => {
       const bucket =
         'login:' +
         req.ip +
@@ -143,6 +161,7 @@ export function authRouter(store: AuthStore) {
       store.logout(sessionToken(req));
       setSession(store, user, req, res);
       res.json({ user });
+      return user;
     })
   );
   router.post('/logout', (req, res) => {

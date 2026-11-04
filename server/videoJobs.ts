@@ -1,5 +1,7 @@
 import { journeySignature } from '../src/shared/journeySignature';
 import { logServerError } from './diagnostics';
+import { recordServerEvent } from './analytics';
+import type { DiagnosticStatus } from '../src/shared/diagnostics';
 import { assertMainlandItinerary } from './serviceRegion';
 import { HttpError } from './httpSecurity';
 import fs from 'node:fs';
@@ -35,6 +37,7 @@ export class VideoRequestError extends Error {
 interface JobRecord extends VideoJob {
   owner: string;
   fingerprint: string;
+  analyticsUserId?: string;
   snapshot: VideoItinerary;
   audioPath?: string;
 }
@@ -85,6 +88,7 @@ export class VideoJobs {
   private processing?: Promise<void>;
   private active?: { id: string; controller: AbortController };
   private stopping = false;
+  private analyticsTimer: ReturnType<typeof setInterval>;
   private cleanupTimer: ReturnType<typeof setInterval>;
   private runner: Runner;
   // Persisted job snapshots are immutable. Validate once per process, rather
@@ -127,6 +131,7 @@ export class VideoJobs {
     for (const job of this.records().filter((j) =>
       ['running', 'cancelling'].includes(j.state)
     )) {
+      this.track(job, 'interrupted', undefined, '服务重启');
       this.save({
         ...job,
         state: 'failed',
@@ -139,6 +144,10 @@ export class VideoJobs {
     this.cleanup();
     this.cleanupTimer = setInterval(() => this.cleanup(), 6 * 3600000);
     this.cleanupTimer.unref();
+    this.analyticsTimer = setInterval(() => {
+      for (const job of this.records().filter(job => activeStates.includes(job.state))) this.track(job, 'heartbeat');
+    }, 30000);
+    this.analyticsTimer.unref();
     this.kick();
   }
 
@@ -176,6 +185,7 @@ export class VideoJobs {
       snapshot: _snapshot,
       audioPath: _audioPath,
       fingerprint: _fingerprint,
+      analyticsUserId: _analyticsUserId,
       ...result
     } = job;
     (result as VideoJob).journeySignature = journeySignature(job.snapshot);
@@ -221,7 +231,8 @@ export class VideoJobs {
     owner: string,
     source: VideoItinerary,
     raw: unknown,
-    kind?: 'scene'
+    kind?: 'scene',
+    analyticsUserId?: string
   ): VideoJob {
     assertMainlandItinerary(source);
     if (this.stopping)
@@ -352,6 +363,7 @@ export class VideoJobs {
       id,
       owner,
       fingerprint,
+      analyticsUserId,
       snapshot: structuredClone(source),
       audioPath,
       itineraryId: source.id,
@@ -379,32 +391,34 @@ export class VideoJobs {
     }
     this.save(job);
     this.acceptedSnapshots.add(job.id);
-    if (kind !== 'scene') this.kick();
+    if (kind !== 'scene') { this.track(job, 'started'); this.kick(); }
     return this.publicJob(job);
   }
 
   cancel(owner: string, id: string): VideoJob {
     const job = this.record(owner, id);
-    if (job.state === 'queued')
+    if (job.state === 'queued') {
+      this.track(job, 'cancelled', undefined, '用户取消');
       this.save({
         ...job,
         state: 'cancelled',
         stage: '已取消',
         finishedAt: new Date().toISOString()
       });
+    }
     if (job.state === 'running') {
       this.save({ ...job, state: 'cancelling', stage: '正在取消' });
       this.active?.controller.abort();
     }
     return this.get(owner, id);
   }
-  retry(owner: string, id: string): VideoJob {
+  retry(owner: string, id: string, userId?: string): VideoJob {
     const job = this.record(owner, id);
     if (!['failed', 'cancelled'].includes(job.state))
       throw new VideoRequestError('这个视频不需要重试。');
-    return this.create(owner, job.snapshot, job.options, job.kind);
+    return this.create(owner, job.snapshot, job.options, job.kind, userId || job.analyticsUserId);
   }
-  fallback(owner: string, id: string, uploadId?: string): VideoJob {
+  fallback(owner: string, id: string, uploadId?: string, userId?: string): VideoJob {
     const job = this.record(owner, id);
     const options = { ...job.options };
     if (options.localMusic) {
@@ -412,7 +426,7 @@ export class VideoJobs {
       delete options.localMusic;
       options.uploadId = uploadId;
     }
-    return this.create(owner, job.snapshot, options);
+    return this.create(owner, job.snapshot, options, undefined, userId || job.analyticsUserId);
   }
   sceneFile(owner: string, id: string, name: string) {
     const job = this.record(owner, id);
@@ -561,6 +575,13 @@ export class VideoJobs {
           if (!this.stopping && this.records().some(job => job.state === 'queued')) this.kick();
         });
   }
+  private track(job: JobRecord, status: DiagnosticStatus, error?: unknown, stage = job.stage) {
+    if (job.kind === 'scene') return;
+    recordServerEvent({ operation: 'video.background', status, userId: job.analyticsUserId,
+      attemptId: job.id, sceneId: job.id, itineraryId: job.itineraryId, stage,
+      elapsedMs: Math.max(0, Date.now() - Date.parse(job.createdAt)), progress: job.progress,
+      details: { bytes: job.bytes, durationSeconds: job.duration } }, error);
+  }
   private async processQueue() {
     while (!this.stopping) {
       const queued = this.records().find((j) => j.state === 'queued');
@@ -636,9 +657,11 @@ export class VideoJobs {
             Date.now() + VIDEO_RETENTION_DAYS * DAY
           ).toISOString()
         });
+        this.track(this.record(queued.owner, queued.id), 'succeeded');
       } catch (error) {
         const current = this.record(queued.owner, queued.id);
         const cancelled = controller.signal.aborted && !this.stopping;
+        this.track(current, cancelled ? 'cancelled' : this.stopping ? 'interrupted' : 'failed', cancelled || this.stopping ? undefined : error);
         if (!cancelled) logServerError(error, { operation: 'video.background', sceneId: queued.id,
           itineraryId: queued.itineraryId, stage: current.stage });
         this.save({
@@ -794,6 +817,7 @@ export class VideoJobs {
   async close() {
     this.stopping = true;
     clearInterval(this.cleanupTimer);
+    clearInterval(this.analyticsTimer);
     this.active?.controller.abort();
     await this.processing;
     this.db.prepare('delete from worker where token=?').run(this.token);

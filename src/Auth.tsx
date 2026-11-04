@@ -18,6 +18,7 @@ import {
 import { AppDialog } from './AppDialog';
 import type { AuthSession, UserAccount } from './shared/auth';
 import './auth.css';
+import { setDiagnosticsUser } from './clientDiagnostics';
 
 export async function accountRequest<T>(
   url: string,
@@ -57,7 +58,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [open, setOpen] = useState(false);
   const refresh = useCallback(async () => {
     try {
-      setSession(await accountRequest<AuthSession>('/api/auth/session'));
+      const next = await accountRequest<AuthSession>('/api/auth/session');
+      setDiagnosticsUser(next.user?.id || null);
+      setSession(next);
     } catch {
       setSession({
         user: null,
@@ -83,12 +86,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
   const signedIn = (user: UserAccount) => {
+    setDiagnosticsUser(user.id);
     setSession((old) => ({ ...old, user }));
     setOpen(false);
     void refresh();
   };
   const logout = async () => {
     await accountRequest('/api/auth/logout', 'POST', {});
+    setDiagnosticsUser(null);
     setSession((old) => ({ ...old, user: null }));
     window.location.assign('/');
   };

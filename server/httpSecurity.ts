@@ -8,6 +8,9 @@ export class HttpError extends Error {
     super(message);
   }
 }
+export class QuotaExceededError extends HttpError {
+  constructor() { super(403, '行程额度已用完，可以继续编辑和导出已有行程。'); }
+}
 export function isDirectLocalRequest(req: express.Request): boolean {
   if (
     !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(

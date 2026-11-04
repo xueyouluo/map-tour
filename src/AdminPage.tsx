@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
+  BarChart3,
   Search,
   Settings2,
   Users,
@@ -10,12 +11,13 @@ import {
 } from 'lucide-react';
 import { AuthControls, accountRequest, useAuth } from './Auth';
 import { AppDialog } from './AppDialog';
+import { AdminReports } from './AdminReports';
 import { SettingsPanel } from './SettingsPanel';
 import type { UserAccount } from './shared/auth';
 
 export function AdminPage() {
   const { session, refresh } = useAuth();
-  const [tab, setTab] = useState<'users' | 'settings'>('users'),
+  const [tab, setTab] = useState<'users' | 'settings' | 'reports'>('users'),
     [search, setSearch] = useState(''),
     [query, setQuery] = useState(''),
     [page, setPage] = useState(1);
@@ -99,7 +101,7 @@ export function AdminPage() {
       <div className="admin-title">
         <span className="auth-eyebrow">MAP TOUR ADMIN</span>
         <h1>管理后台</h1>
-        <p>管理用户、行程额度，以及这台服务器上的服务配置。</p>
+        <p>查看使用报表，管理用户、行程额度与服务配置。</p>
       </div>
       <nav className="admin-tabs" aria-label="管理后台栏目">
         <button
@@ -118,8 +120,11 @@ export function AdminPage() {
           <Settings2 size={16} />
           服务设置
         </button>
+        <button type="button" aria-pressed={tab === 'reports'} onClick={() => setTab('reports')}>
+          <BarChart3 size={16} />使用报表
+        </button>
       </nav>
-      {tab === 'settings' ? (
+      {tab === 'reports' ? <AdminReports /> : tab === 'settings' ? (
         <section className="admin-settings">
           <SettingsPanel />
         </section>

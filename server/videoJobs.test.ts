@@ -390,3 +390,29 @@ it('rebuilds missing browser plans without invoking the heavy renderer and valid
   expect(() => manager.sceneAudio('bob', musicScene.id)).toThrow('没有找到');
   expect(() => parseExportOptions({ ...local, localMusic: { name: 'bad', duration: Infinity } }, true)).toThrow('本地音乐信息无效');
 });
+
+it('records verified background results with real user identity and does not count scene entries as MP4 successes', async () => {
+  const { AnalyticsStore, useAnalyticsStore } = await import('./analytics');
+  const analytics = new AnalyticsStore(':memory:');
+  useAnalyticsStore(analytics);
+  const directory = root();
+  let attempts = 0;
+  const manager = new VideoJobs(directory, async job => {
+    if (++attempts === 1) throw new Error('render timeout');
+    complete(directory, job.id, job.duration);
+  });
+  managers.push(manager);
+  try {
+    const failed = manager.create('owner-hash', source(), { music: 'none' }, undefined, 'real-user');
+    expect(failed).not.toHaveProperty('analyticsUserId');
+    await vi.waitFor(() => expect(manager.get('owner-hash', failed.id).state).toBe('failed'));
+    const retried = manager.retry('owner-hash', failed.id);
+    await vi.waitFor(() => expect(manager.get('owner-hash', retried.id).state).toBe('completed'));
+    manager.create('owner-hash', source(), { music: 'none' }, 'scene', 'real-user');
+    const report = analytics.report();
+    expect(report.operations).toHaveLength(1);
+    expect(report.operations[0]).toMatchObject({ operation: 'video.background', attempts: 2, succeeded: 1, failed: 1, successRate: .5 });
+    expect(report.recent.every(row => row.userId === 'real-user')).toBe(true);
+    expect(report.recent.find(row => row.status === 'succeeded')?.details?.bytes).toBeGreaterThan(0);
+  } finally { useAnalyticsStore(undefined); analytics.close(); }
+});

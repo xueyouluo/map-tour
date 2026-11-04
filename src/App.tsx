@@ -1,3 +1,4 @@
+import { createClientAttempt, reportClientEvent } from './clientDiagnostics';
 import { StopLocationEditor } from './StopLocationEditor';
 import { updateStopLocation } from './shared/stopLocations';
 import {
@@ -136,7 +137,7 @@ function AppRoutes() {
 }
 
 function MainApp({ pathname }: { pathname: string }) {
-  const { session, openAuth, refresh: refreshAccount } = useAuth();
+  const { session, openAuth, loading: authLoading, refresh: refreshAccount } = useAuth();
   const user = session.user;
   const canManageSettings = user?.role === 'admin';
   const shareId = useMemo(
@@ -212,9 +213,9 @@ function MainApp({ pathname }: { pathname: string }) {
   }, [itinerary?.id]);
 
   useEffect(() => {
-    if (!shareId) return;
+    if (!shareId || authLoading) return;
     setParseStatus('正在读取分享行程...');
-    loadItinerary(shareId)
+    loadItinerary(shareId, true)
       .then(({ itinerary: loaded, editable }) => {
         setItinerary(loaded);
         setReadOnly(!editable);
@@ -224,7 +225,7 @@ function MainApp({ pathname }: { pathname: string }) {
         setError(err instanceof Error ? err.message : String(err));
         setParseStatus('');
       });
-  }, [shareId, user?.id]);
+  }, [shareId, user?.id, authLoading]);
 
   async function handleParse(text: string, image?: File | null) {
     if (!user) {
@@ -232,6 +233,7 @@ function MainApp({ pathname }: { pathname: string }) {
       return;
     }
     if (!canCreateItinerary(user)) {
+      reportClientEvent({ operation: 'quota.blocked', stage: '前端额度检查', details: { action: 'parse', reason: 'limit_reached' } }, 'blocked');
       setError('行程额度已用完，可以继续编辑和导出已有行程。');
       return;
     }
@@ -302,7 +304,7 @@ function MainApp({ pathname }: { pathname: string }) {
       const result = await saveItinerary({
         ...itinerary,
         shareStatus: 'shared'
-      });
+      }, 'share');
       const absoluteUrl = new URL(
         result.shareUrl,
         window.location.origin
@@ -319,10 +321,13 @@ function MainApp({ pathname }: { pathname: string }) {
 
   async function handleCopyShareUrl() {
     if (!shareUrl) return;
+    const attempt = createClientAttempt({ operation: 'share.copy', itineraryId: itinerary?.id });
     try {
       await navigator.clipboard.writeText(shareUrl);
+      attempt.finish('succeeded');
       setCopyStatus('copied');
-    } catch {
+    } catch (error) {
+      attempt.finish('failed', error);
       setCopyStatus('failed');
     }
   }
@@ -392,8 +397,10 @@ function MainApp({ pathname }: { pathname: string }) {
   async function handleSaveStopLocation(candidate: PoiCandidate) {
     if (!itinerary || !editingStopId || !user)
       throw new Error('请先登录并选择需要修改的地点。');
-    if (readOnly && !canCreateItinerary(user))
+    if (readOnly && !canCreateItinerary(user)) {
+      reportClientEvent({ operation: 'quota.blocked', stage: '前端额度检查', details: { action: 'copy', reason: 'limit_reached' } }, 'blocked');
       throw new Error('新建额度已用完，无法另存分享行程。');
+    }
     let next = updateStopLocation(itinerary, editingStopId, candidate);
     if (readOnly) next = { ...next, id: 'draft', shareStatus: 'draft' };
     const saved = await saveItinerary(next);
@@ -444,6 +451,7 @@ function MainApp({ pathname }: { pathname: string }) {
       return;
     }
     if (readOnly && !canCreateItinerary(user)) {
+      reportClientEvent({ operation: 'quota.blocked', stage: '前端额度检查', details: { action: 'copy', reason: 'limit_reached' } }, 'blocked');
       setError('行程额度已用完，不能另存新行程；仍可编辑自己的已有行程。');
       return;
     }

@@ -1,4 +1,4 @@
-import { HttpError } from './httpSecurity';
+import { HttpError, QuotaExceededError } from './httpSecurity';
 import { assertMainlandItinerary } from './serviceRegion';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -117,10 +117,7 @@ export class ItineraryStore {
             user.role !== 'admin' &&
             user.itinerary_count >= user.itinerary_limit
           )
-            throw new HttpError(
-              403,
-              '行程额度已用完，可以继续编辑和导出已有行程。'
-            );
+            throw new QuotaExceededError();
           db.prepare(
             'update users set itinerary_count=itinerary_count+1 where id=?'
           ).run(access.userId);
