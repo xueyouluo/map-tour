@@ -19,6 +19,7 @@ import type {
 import { chromePath, projectRoot } from '../tools/video-preview/runtime.mjs';
 import { writeBrowserScene } from './browserScenes';
 import { MusicLibrary } from './musicLibrary';
+import { mapCachePolicy, pruneMapCache } from '../tools/video-preview/cache.mjs';
 
 export const VIDEO_UPLOAD_LIMIT = 25 * 1024 * 1024;
 export const VIDEO_RETENTION_DAYS = 7;
@@ -89,6 +90,7 @@ export class VideoJobs {
   private active?: { id: string; controller: AbortController };
   private stopping = false;
   private analyticsTimer: ReturnType<typeof setInterval>;
+  private mapCacheTimer: ReturnType<typeof setInterval>;
   private cleanupTimer: ReturnType<typeof setInterval>;
   private runner: Runner;
   // Persisted job snapshots are immutable. Validate once per process, rather
@@ -144,6 +146,9 @@ export class VideoJobs {
     this.cleanup();
     this.cleanupTimer = setInterval(() => this.cleanup(), 6 * 3600000);
     this.cleanupTimer.unref();
+    this.cleanupMapCache();
+    this.mapCacheTimer = setInterval(() => this.cleanupMapCache(), 3600000);
+    this.mapCacheTimer.unref();
     this.analyticsTimer = setInterval(() => {
       for (const job of this.records().filter(job => activeStates.includes(job.state))) this.track(job, 'heartbeat');
     }, 30000);
@@ -575,6 +580,13 @@ export class VideoJobs {
           if (!this.stopping && this.records().some(job => job.state === 'queued')) this.kick();
         });
   }
+  private cleanupMapCache() {
+    if (this.stopping || this.records().some(job => activeStates.includes(job.state))) return;
+    try {
+      const result = pruneMapCache(path.resolve(process.env.VIDEO_CACHE_DIR || path.join(this.root, 'cache')), mapCachePolicy());
+      if (result.status !== 'empty') console.info(JSON.stringify({ event: 'video.cache.cleanup', ...result }));
+    } catch (error) { logServerError(error, { operation: 'video.cache.cleanup' }); }
+  }
   private track(job: JobRecord, status: DiagnosticStatus, error?: unknown, stage = job.stage) {
     if (job.kind === 'scene') return;
     recordServerEvent({ operation: 'video.background', status, userId: job.analyticsUserId,
@@ -678,6 +690,7 @@ export class VideoJobs {
         });
       } finally {
         this.active = undefined;
+        this.cleanupMapCache();
       }
     }
   }
@@ -817,6 +830,7 @@ export class VideoJobs {
   async close() {
     this.stopping = true;
     clearInterval(this.cleanupTimer);
+    clearInterval(this.mapCacheTimer);
     clearInterval(this.analyticsTimer);
     this.active?.controller.abort();
     await this.processing;

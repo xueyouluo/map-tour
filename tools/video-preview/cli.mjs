@@ -17,6 +17,7 @@ import {
   startPreviewServer
 } from './runtime.mjs';
 import { prepareTerrain, captureMaps } from './assets.mjs';
+import { mapCachePolicy } from './cache.mjs';
 import { inspectAudio, renderVideo, verifyVideo } from './render.mjs';
 import { writeUpbeatMusic } from './music.mjs';
 
@@ -47,6 +48,7 @@ const environment = {
     : {}),
   ...process.env
 };
+const cachePolicy = mapCachePolicy(environment);
 const databasePath = path.resolve(
   projectRoot,
   values.db || environment.SQLITE_DB_PATH || 'data/map-tour.sqlite'
@@ -212,7 +214,8 @@ async function main() {
       directory,
       cache,
       log,
-      cancellation.signal
+      cancellation.signal,
+      cachePolicy
     );
     server = await startPreviewServer(directory, environment);
     browser = await chromium.launch({
@@ -248,7 +251,8 @@ async function main() {
       directory,
       cache,
       log,
-      cancellation.signal
+      cancellation.signal,
+      cachePolicy
     );
     manifest.assets = {
       detailPatches: assets.detailPatches,

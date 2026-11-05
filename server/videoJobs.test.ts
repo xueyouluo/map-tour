@@ -441,3 +441,39 @@ it('keeps real disk-space limits for scenes and background jobs before invoking 
   expect(() => manager.create('alice', source(), { music: 'none' })).toThrow('可用空间不足');
   expect(runner).not.toHaveBeenCalled();
 });
+
+it('cleans map caches at startup, hourly and after jobs finish, while deferring for active tasks', async () => {
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+  vi.useFakeTimers();
+  const directory = root(), satellite = path.join(directory, 'cache', 'satellite');
+  fs.mkdirSync(satellite, { recursive: true });
+  const addOldTile = (label: string) => {
+    const data = Buffer.from(label), id = createHash('sha256').update(label).digest('hex');
+    const file = path.join(satellite, id + '.jpg'); fs.writeFileSync(file, data);
+    fs.writeFileSync(file + '.json', JSON.stringify({ sha256: createHash('sha256').update(data).digest('hex'), source: 'AMap JS SDK Satellite layer' }));
+    const old = new Date(Date.now() - 8 * 86400000); fs.utimesSync(file, old, old); return file;
+  };
+  const startup = addOldTile('startup');
+  let release: (() => void) | undefined;
+  const manager = new VideoJobs(directory, async job => {
+    await new Promise<void>(resolve => { release = resolve; });
+    complete(directory, job.id, job.duration);
+  });
+  managers.push(manager);
+  try {
+    expect(fs.existsSync(startup)).toBe(false);
+    const hourly = addOldTile('hourly'); await vi.advanceTimersByTimeAsync(3600000);
+    expect(fs.existsSync(hourly)).toBe(false);
+    const job = manager.create('alice', source(), { music: 'none' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.get('alice', job.id).state).toBe('running');
+    const active = addOldTile('active'); await vi.advanceTimersByTimeAsync(3600000);
+    expect(fs.existsSync(active)).toBe(true);
+    release!(); await vi.advanceTimersByTimeAsync(0);
+    expect(manager.get('alice', job.id).state).toBe('completed');
+    expect(fs.existsSync(active)).toBe(false);
+    expect(fs.existsSync(manager.media('alice', job.id, 'video').file)).toBe(true);
+  } finally {
+    release?.(); await manager.close(); managers.splice(managers.indexOf(manager), 1); vi.useRealTimers();
+  }
+});

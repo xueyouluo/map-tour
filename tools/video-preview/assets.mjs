@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { mercator, inverseMercator } from '../../src/shared/videoPlan.ts';
 import { runFile } from './runtime.mjs';
+import { withMapCacheLease } from './cache.mjs';
 
 async function cachedFile(target, producer) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -53,6 +54,7 @@ async function cachedFile(target, producer) {
       createHash('sha256').update(fs.readFileSync(target)).digest('hex')
     )
       throw new Error(`地图缓存校验失败，未覆盖：${path.basename(target)}`);
+    try { const now = new Date(); fs.utimesSync(target, now, now); } catch { /* Access accounting must not break a readable cache hit. */ }
     return { cached: true };
   }
   let fd;
@@ -149,7 +151,10 @@ function toWgs84(lng, lat) {
   return [a, b];
 }
 
-export async function prepareTerrain(plan, directory, cache, log, signal) {
+export function prepareTerrain(plan, directory, cache, log, signal, policy) {
+  return withMapCacheLease(cache, () => prepareTerrainAssets(plan, directory, cache, log, signal), policy);
+}
+async function prepareTerrainAssets(plan, directory, cache, log, signal) {
   const requests = [],
     jobs = new Map(),
     size = 257;
@@ -289,7 +294,10 @@ function mapCaptureJobs(plan, details) {
   return jobs;
 }
 
-export async function captureMaps(
+export function captureMaps(browser, url, plan, details, directory, cache, log, signal, policy) {
+  return withMapCacheLease(cache, () => captureMapAssets(browser, url, plan, details, directory, cache, log, signal), policy);
+}
+async function captureMapAssets(
   browser,
   url,
   plan,

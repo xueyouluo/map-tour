@@ -21,3 +21,5 @@
 浏览器直接准备素材的版本需要同步 `dist/.vite/manifest.json` 与所有新构建 chunk，再更新服务端并重启 `map-tour`。浏览器预览不再依赖服务器 Chromium/FFmpeg；这些只用于手动后台制作、旧任务或试听缩略图工具。音乐 CDN 可选：在已有对象存储中上传同名哈希 MP3，配置 `VIDEO_MUSIC_CDN_URL`（HTTPS 目录，允许浏览器 CORS），未配置时保留受权限保护的压缩 MP3 下载。禁止将 `.env`、生成的地图/音乐/视频或 SQLite 随源码覆盖。
 
 浏览器事件通过 `/api/diagnostics/events` 入库并写入日志，失败筛选 `client.error`，成功等结果筛选 `client.event`；API、地图代理和后台制作异常筛选 `server.error`。主 SQLite 新增 `analytics_events` / `analytics_meta`，保留 90 天，可在管理员「使用报表」查看导出、分享、账号和额度拦截统计。字段、权限、限额及查询命令见 [使用报表与诊断](DIAGNOSTICS.md)。此功能需要同时更新前端构建及服务端；构建时指定 `MAP_TOUR_BUILD_ID` 并写入 `RELEASE`，方便关联发布版本。
+
+服务器共享地图缓存默认 512 MiB、7 天未使用过期，启动和每小时自动检查，并在素材读取/后台任务结束后检查。配置 `VIDEO_CACHE_MAX_MB`、`VIDEO_CACHE_TTL_DAYS` 可调整；具体保护和跳过规则见 [视频缓存策略](VIDEO_EXPORT.md#服务器共享地图缓存)。首次部署会清理符合规则的旧公共缓存，需先在副本演练，保留任务素材、用户数据及回滚备份；共享缓存无需随应用回滚恢复。
