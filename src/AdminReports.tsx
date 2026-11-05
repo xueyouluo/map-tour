@@ -3,6 +3,7 @@ import { RefreshCw, Activity, Download, CheckCircle2, Users } from 'lucide-react
 import { accountRequest } from './Auth';
 import { diagnosticOperations, type AnalyticsReport } from './shared/diagnostics';
 import './adminReports.css';
+import { AdminCacheReport } from './AdminCacheReport';
 
 const labels: Record<string, string> = {
   'itinerary.parse': '行程解析', 'video.scene': '场景入口创建', 'video.preview': '预览加载',
@@ -43,6 +44,7 @@ export function AdminReports() {
       <div><h2>使用报表</h2><p>从行程解析到成片，查看每一步的实际结果。</p></div>
       <button className="analytics-refresh" disabled={loading} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button>
     </div>
+    <AdminCacheReport revision={revision} />
     <form className="analytics-filters" onSubmit={event => { event.preventDefault(); setUserId(userInput.trim()); setPage(1); }}>
       <label>时间<select aria-label="时间" value={days} onChange={event => { setDays(event.target.value); setPage(1); }}>
         <option value="1">今天</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option>

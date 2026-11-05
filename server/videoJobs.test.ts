@@ -469,6 +469,7 @@ it('cleans map caches at startup, hourly and after jobs finish, while deferring 
     expect(manager.get('alice', job.id).state).toBe('running');
     const active = addOldTile('active'); await vi.advanceTimersByTimeAsync(3600000);
     expect(fs.existsSync(active)).toBe(true);
+    expect(manager.cacheReport().history[0]).toMatchObject({ status: 'skipped', reason: 'active_task' });
     release!(); await vi.advanceTimersByTimeAsync(0);
     expect(manager.get('alice', job.id).state).toBe('completed');
     expect(fs.existsSync(active)).toBe(false);

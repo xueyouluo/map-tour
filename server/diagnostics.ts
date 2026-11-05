@@ -1,4 +1,5 @@
 import express from 'express';
+import type { MapCacheReport } from '../src/shared/mapCache';
 import { requireUser, requireAdmin } from './authRoutes';
 import { sameOriginMutation } from './httpSecurity';
 import { diagnosticError, diagnosticOperations, diagnosticStatuses, diagnosticText, type ClientDiagnostic } from '../src/shared/diagnostics';
@@ -85,8 +86,18 @@ export function clientDiagnosticsRouter(write: (line: string) => void = line => 
   return router;
 }
 
-export function analyticsReportRouter(store: AnalyticsStore) {
+export function analyticsReportRouter(store: AnalyticsStore, cacheReport?: () => MapCacheReport) {
   const router = express.Router();
+  router.get('/cache', requireAdmin, (_req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      if (!cacheReport) return res.status(503).json({ error: '缓存报表暂不可用。' });
+      res.json(cacheReport());
+    } catch (error) {
+      logServerError(error, { operation: 'video.cache.report' });
+      res.status(503).json({ error: '缓存报表读取失败，请稍后刷新。' });
+    }
+  });
   router.get('/', requireAdmin, (req, res) => {
     const { days = '7', operation = '', browser = '', userId = '', status = '', page = '1' } = req.query;
     if (![days,operation,browser,userId,status,page].every(value => typeof value === 'string') ||

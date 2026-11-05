@@ -59,6 +59,7 @@ function transaction(root, work) {
       db.exec(`PRAGMA application_id=${APPLICATION_ID};
         CREATE TABLE leases(token TEXT PRIMARY KEY,pid INTEGER NOT NULL,process_start TEXT NOT NULL);`);
     }
+    db.exec('CREATE TABLE IF NOT EXISTS cleanup_history(id INTEGER PRIMARY KEY,at TEXT NOT NULL,payload TEXT NOT NULL)');
     const result = work(db);
     db.exec('COMMIT');
     return result;
@@ -98,7 +99,7 @@ export async function withMapCacheLease(root, work, policy = mapCachePolicy()) {
 
 function entries(root) {
   const files = [];
-  let ignoredFiles = 0;
+  let ignoredFiles = 0, locked = false;
   for (const [name, pattern] of [['dem', /^\d+-\d+-\d+\.png$/], ['satellite', /^[a-f0-9]{64}\.jpg$/]]) {
     const dir = path.join(root, name);
     if (!fs.existsSync(dir)) continue;
@@ -106,7 +107,7 @@ function entries(root) {
     if (!stat.isDirectory() || stat.isSymbolicLink()) { ignoredFiles++; continue; }
     const names = fs.readdirSync(dir);
     // Even legacy writers and unknown locks are protected. Never reclaim their transaction.
-    if (names.some(file => file.endsWith('.lock'))) return { locked: true };
+    if (names.some(file => file.endsWith('.lock'))) locked = true;
     for (const file of names) {
       if (!pattern.test(file)) { if (!file.endsWith('.json')) ignoredFiles++; continue; }
       const target = path.join(dir, file), metadata = target + '.json';
@@ -121,7 +122,7 @@ function entries(root) {
       files.push({ target, metadata, dataStat, metadataStat, bytes: dataStat.size + metadataStat.size, usedAt: dataStat.mtimeMs });
     }
   }
-  return { files, ignoredFiles };
+  return { files, ignoredFiles, locked };
 }
 function unchanged(file, stat) {
   const current = regular(file);
@@ -134,12 +135,13 @@ export function pruneMapCache(root, policy = mapCachePolicy(), now = Date.now())
   const base = { deletedEntries: 0, freedBytes: 0, maxBytes: policy.maxBytes, ttlMs: policy.ttlMs };
   if (!fs.existsSync(root)) return { ...base, status: 'empty', remainingBytes: 0 };
   root = directory(root);
-  return transaction(root, db => {
+  try { return transaction(root, db => {
+    const finish = result => { saveCleanup(db, result, now); return result; };
     const leases = db.prepare('SELECT * FROM leases').all();
-    if (leases.some(alive)) return { ...base, status: 'skipped', reason: 'active_reader' };
+    if (leases.some(alive)) return finish({ ...base, status: 'skipped', reason: 'active_reader' });
     for (const lease of leases) db.prepare('DELETE FROM leases WHERE token=?').run(lease.token);
     const found = entries(root);
-    if (found.locked) return { ...base, status: 'skipped', reason: 'entry_lock' };
+    if (found.locked) return finish({ ...base, status: 'skipped', reason: 'entry_lock' });
     const files = found.files.sort((a, b) => a.usedAt - b.usedAt || a.target.localeCompare(b.target));
     let remainingBytes = files.reduce((sum, file) => sum + file.bytes, 0);
     let deletedEntries = 0, freedBytes = 0, protectedEntries = 0;
@@ -152,7 +154,66 @@ export function pruneMapCache(root, policy = mapCachePolicy(), now = Date.now())
       fs.unlinkSync(file.metadata);
       remainingBytes -= file.bytes; freedBytes += file.bytes; deletedEntries++;
     }
-    return { ...base, status: remainingBytes > policy.maxBytes ? 'deferred' : 'completed',
-      remainingBytes, deletedEntries, freedBytes, protectedEntries, ignoredFiles: found.ignoredFiles };
-  });
+    return finish({ ...base, status: remainingBytes > policy.maxBytes ? 'deferred' : 'completed',
+      remainingBytes, deletedEntries, freedBytes, protectedEntries, ignoredFiles: found.ignoredFiles });
+  }); } catch (error) {
+    try { recordMapCacheCleanup(root, { ...base, status: 'failed', reason: 'maintenance_error' }, now); }
+    catch { /* Preserve the original failure if coordination is unavailable. */ }
+    throw error;
+  }
+}
+
+function saveCleanup(db, result, now) {
+  db.prepare('INSERT INTO cleanup_history(at,payload) VALUES (?,?)').run(new Date(now).toISOString(), JSON.stringify(result));
+  db.exec('DELETE FROM cleanup_history WHERE id NOT IN (SELECT id FROM cleanup_history ORDER BY id DESC LIMIT 50)');
+}
+export function recordMapCacheCleanup(root, result, now = Date.now()) {
+  // Recording a deferred check must not create a cache that has never been used.
+  if (!fs.existsSync(root)) return;
+  root = directory(root);
+  transaction(root, db => saveCleanup(db, result, now));
+}
+
+// Read-only snapshot: no pruning, touching hit timestamps, lease mutation or schema creation.
+export function mapCacheReport(root, policy = mapCachePolicy(), now = Date.now()) {
+  const report = { checkedAt: new Date(now).toISOString(), ...policy, usedBytes: 0, managedBytes: 0,
+    otherBytes: 0, coordinationBytes: 0, entries: 0, activeReaders: 0, writeLocks: 0,
+    namespaces: [], history: [] };
+  if (!fs.existsSync(root)) return report;
+  root = directory(root);
+  const found = entries(root);
+  report.managedBytes = found.files.reduce((sum, file) => sum + file.bytes, 0);
+  report.entries = found.files.length;
+  for (const name of ['dem', 'satellite']) {
+    const dir = path.join(root, name);
+    if (!fs.existsSync(dir) || !fs.lstatSync(dir).isDirectory() || fs.lstatSync(dir).isSymbolicLink()) continue;
+    let bytes = 0;
+    for (const file of fs.readdirSync(dir)) {
+      const stat = regular(path.join(dir, file));
+      if (!stat) continue;
+      bytes += stat.size;
+      if (file.endsWith('.lock')) report.writeLocks++;
+    }
+    report.namespaces.push({ name, bytes, entries: found.files.filter(file => path.dirname(file.target) === dir).length });
+    report.usedBytes += bytes;
+  }
+  for (const name of [STATE_FILE, STATE_FILE + '-wal', STATE_FILE + '-shm', STATE_FILE + '-journal'])
+    report.coordinationBytes += regular(path.join(root, name))?.size || 0;
+  report.otherBytes = Math.max(0, report.usedBytes - report.managedBytes);
+  report.usedBytes += report.coordinationBytes;
+  const file = path.join(root, STATE_FILE);
+  if (fs.existsSync(file)) {
+    if (!regular(file)) throw new Error('地图缓存协调文件类型不正确');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      db.exec('PRAGMA busy_timeout=1000');
+      if (db.prepare('PRAGMA application_id').get().application_id !== APPLICATION_ID)
+        throw new Error('地图缓存协调文件不属于当前应用');
+      report.activeReaders = db.prepare('SELECT * FROM leases').all().filter(alive).length;
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cleanup_history'").get())
+        report.history = db.prepare('SELECT at,payload FROM cleanup_history ORDER BY id DESC LIMIT 50').all()
+          .map(row => ({ ...JSON.parse(row.payload), at: row.at }));
+    } finally { db.close(); }
+  }
+  return report;
 }

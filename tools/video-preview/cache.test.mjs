@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PNG } from 'pngjs';
 import { afterEach, expect, it, vi } from 'vitest';
-import { acquireMapCacheLease, mapCachePolicy, pruneMapCache, withMapCacheLease } from './cache.mjs';
+import { acquireMapCacheLease, mapCachePolicy, mapCacheReport, recordMapCacheCleanup, pruneMapCache, withMapCacheLease } from './cache.mjs';
 import { prepareTerrain } from './assets.mjs';
 
 const roots = [], children = [];
@@ -166,4 +166,59 @@ it('uses bounded configuration defaults and skips a missing cache without creati
   expect(mapCachePolicy({ VIDEO_CACHE_MAX_MB: '256', VIDEO_CACHE_TTL_DAYS: '3' })).toEqual({ maxBytes: 256 * 1024 ** 2, ttlMs: 3 * DAY });
   expect(mapCachePolicy({ VIDEO_CACHE_MAX_MB: '-1', VIDEO_CACHE_TTL_DAYS: 'nonsense' })).toEqual(mapCachePolicy({}));
   const missing = path.join(root(), 'missing'); expect(pruneMapCache(missing).status).toBe('empty'); expect(fs.existsSync(missing)).toBe(false);
+});
+
+it('reports bytes and live protections without deleting files, refreshing hit times or creating state', () => {
+  const dir = root(), missing = path.join(dir, 'missing');
+  expect(mapCacheReport(missing)).toMatchObject({ usedBytes: 0, history: [], entries: 0 });
+  expect(fs.existsSync(missing)).toBe(false);
+  const old = tile(dir, 'old-report', 8 * DAY);
+  const other = path.join(dir, 'satellite', 'unknown.tmp'); fs.writeFileSync(other, 'retain');
+  const before = fs.statSync(old.file).mtimeMs;
+  expect(mapCacheReport(dir)).toMatchObject({ managedBytes: old.bytes, otherBytes: 6, usedBytes: old.bytes + 6, history: [] });
+  expect(fs.existsSync(path.join(dir, '.map-tour-cache.sqlite'))).toBe(false);
+  const release = acquireMapCacheLease(dir);
+  try {
+    fs.writeFileSync(path.join(dir, 'satellite', 'writer.lock'), 'locked');
+    const report = mapCacheReport(dir);
+    expect(report).toMatchObject({ activeReaders: 1, writeLocks: 1, entries: 1 });
+    expect(report.usedBytes).toBe(old.bytes + 12 + report.coordinationBytes);
+    expect(report.namespaces).toEqual([{ name: 'satellite', entries: 1, bytes: old.bytes + 12 }]);
+    expect(fs.statSync(old.file).mtimeMs).toBe(before);
+    expect(mapCacheReport(dir)).toEqual({ ...report, checkedAt: expect.any(String) });
+    expect(fs.existsSync(old.file)).toBe(true);
+  } finally { release(); }
+});
+it('persists bounded cleanup history across instances and records skipped and failed cleanup attempts', () => {
+  const dir = root(), old = tile(dir, 'old-history', 8 * DAY);
+  pruneMapCache(dir, mapCachePolicy(), now);
+  expect(mapCacheReport(dir).history[0]).toMatchObject({ at: new Date(now).toISOString(), deletedEntries: 1, freedBytes: old.bytes, status: 'completed' });
+  const release = acquireMapCacheLease(dir);
+  try {
+    pruneMapCache(dir, mapCachePolicy(), now + 1);
+    expect(mapCacheReport(dir).history[0]).toMatchObject({ status: 'skipped', reason: 'active_reader' });
+  } finally { release(); }
+  tile(dir, 'failure', 8 * DAY);
+  const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => { throw new Error('simulated disk failure'); });
+  expect(() => pruneMapCache(dir)).toThrow('simulated disk failure'); unlink.mockRestore();
+  expect(mapCacheReport(dir).history[0]).toMatchObject({ status: 'failed', reason: 'maintenance_error' });
+  for (let i = 0; i < 60; i++) recordMapCacheCleanup(dir, { ...mapCachePolicy(), status: 'skipped', reason: 'active_task', freedBytes: 0, deletedEntries: 0 }, now + i + 2);
+  const report = mapCacheReport(dir);
+  expect(report.history).toHaveLength(50);
+  expect(report.history[0]).toMatchObject({ at: new Date(now + 61).toISOString(), reason: 'active_task' });
+  expect(report.history.at(-1).at).toBe(new Date(now + 12).toISOString());
+});
+it('reads old coordinator schemas without migrating them and never follows report symlinks', () => {
+  const dir = root(), release = acquireMapCacheLease(dir); release();
+  const state = path.join(dir, '.map-tour-cache.sqlite');
+  const db = new DatabaseSync(state); db.exec('DROP TABLE cleanup_history'); db.close();
+  const before = fs.readFileSync(state);
+  const target = root(), user = path.join(target, 'user.mp4'); fs.writeFileSync(user, 'user video');
+  fs.symlinkSync(target, path.join(dir, 'satellite'));
+  expect(mapCacheReport(dir)).toMatchObject({ entries: 0, otherBytes: 0, history: [] });
+  expect(fs.readFileSync(state)).toEqual(before);
+  expect(fs.readFileSync(user, 'utf8')).toBe('user video');
+  fs.unlinkSync(state); fs.symlinkSync(user, state);
+  expect(() => mapCacheReport(dir)).toThrow();
+  expect(fs.readFileSync(user, 'utf8')).toBe('user video');
 });

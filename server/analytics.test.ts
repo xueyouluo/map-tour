@@ -109,13 +109,27 @@ it('protects reports by role, validates filters, and persists authenticated succ
   app.use(express.json());
   app.use((req, _res, next) => { if (req.get('x-user')) req.currentUser = { id: req.get('x-user'), role: req.get('x-role') || 'user' } as Express.Request['currentUser']; next(); });
   app.use('/api/diagnostics', clientDiagnosticsRouter(() => {}, store));
-  app.use('/api/admin/reports', analyticsReportRouter(store));
+  let cacheReads = 0;
+  app.use('/api/admin/reports', analyticsReportRouter(store, () => {
+    cacheReads++;
+    if (cacheReads > 1) throw new Error('private path must not leak');
+    return { checkedAt: new Date().toISOString(), maxBytes: 512 * 1024 ** 2, ttlMs: 7 * 86400000, usedBytes: 42, managedBytes: 42, otherBytes: 0, coordinationBytes: 0, entries: 1, activeReaders: 0, writeLocks: 0, namespaces: [], history: [] };
+  }));
   const server: Server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   try {
     expect((await fetch(origin + '/api/admin/reports')).status).toBe(401);
     expect((await fetch(origin + '/api/admin/reports', { headers: { 'x-user': 'alice' } })).status).toBe(403);
+    expect((await fetch(origin + '/api/admin/reports/cache')).status).toBe(401);
+    expect((await fetch(origin + '/api/admin/reports/cache', { headers: { 'x-user': 'alice' } })).status).toBe(403);
+    expect(cacheReads).toBe(0);
     const headers = { 'x-user': 'admin', 'x-role': 'admin' };
+    const cache = await fetch(origin + '/api/admin/reports/cache', { headers });
+    expect(cache.headers.get('cache-control')).toContain('no-store');
+    expect(await cache.json()).toMatchObject({ usedBytes: 42, maxBytes: 512 * 1024 ** 2 });
+    const failedCache = await fetch(origin + '/api/admin/reports/cache', { headers });
+    expect(failedCache.status).toBe(503);
+    expect(JSON.stringify(await failedCache.json())).not.toContain('private path');
     expect((await fetch(origin + '/api/admin/reports?days=100', { headers })).status).toBe(400);
     const send = (body: unknown) => fetch(origin + '/api/diagnostics/events', { method: 'POST', headers: { 'x-user': 'alice', origin, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const success = event('ok', 'succeeded', { userId: 'spoofed', source: 'server', details: { bytes: 1234 }, error: { name: 'Error', message: 'ignored' } });

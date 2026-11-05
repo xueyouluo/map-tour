@@ -19,7 +19,7 @@ import type {
 import { chromePath, projectRoot } from '../tools/video-preview/runtime.mjs';
 import { writeBrowserScene } from './browserScenes';
 import { MusicLibrary } from './musicLibrary';
-import { mapCachePolicy, pruneMapCache } from '../tools/video-preview/cache.mjs';
+import { mapCachePolicy, mapCacheReport, pruneMapCache, recordMapCacheCleanup } from '../tools/video-preview/cache.mjs';
 
 export const VIDEO_UPLOAD_LIMIT = 25 * 1024 * 1024;
 export const VIDEO_RETENTION_DAYS = 7;
@@ -580,10 +580,18 @@ export class VideoJobs {
           if (!this.stopping && this.records().some(job => job.state === 'queued')) this.kick();
         });
   }
+  private mapCacheRoot() {
+    return path.resolve(process.env.VIDEO_CACHE_DIR || path.join(this.root, 'cache'));
+  }
+  cacheReport() { return mapCacheReport(this.mapCacheRoot(), mapCachePolicy()); }
   private cleanupMapCache() {
-    if (this.stopping || this.records().some(job => activeStates.includes(job.state))) return;
+    if (this.stopping) return;
     try {
-      const result = pruneMapCache(path.resolve(process.env.VIDEO_CACHE_DIR || path.join(this.root, 'cache')), mapCachePolicy());
+      if (this.records().some(job => activeStates.includes(job.state))) {
+        recordMapCacheCleanup(this.mapCacheRoot(), { ...mapCachePolicy(), status: 'skipped', reason: 'active_task', deletedEntries: 0, freedBytes: 0 });
+        return;
+      }
+      const result = pruneMapCache(this.mapCacheRoot(), mapCachePolicy());
       if (result.status !== 'empty') console.info(JSON.stringify({ event: 'video.cache.cleanup', ...result }));
     } catch (error) { logServerError(error, { operation: 'video.cache.cleanup' }); }
   }

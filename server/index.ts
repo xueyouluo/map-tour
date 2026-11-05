@@ -68,7 +68,7 @@ app.use(
 app.use('/api/auth', authRouter(auth));
 app.use('/api/admin/users', adminUsersRouter(auth));
 app.use('/api/diagnostics', clientDiagnosticsRouter(undefined, analytics));
-app.use('/api/admin/reports', analyticsReportRouter(analytics));
+app.use('/api/admin/reports', analyticsReportRouter(analytics, () => videoJobs.cacheReport()));
 const access = (req: express.Request) => ({
   userId: req.currentUser!.id,
   admin: req.currentUser!.role === 'admin'

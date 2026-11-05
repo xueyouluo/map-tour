@@ -62,3 +62,10 @@
 
 .analytics-business-cards { margin-top:14px; }
 .analytics-status.blocked { background:#fff3dc; color:#99732e; }
+
+.analytics-cache { margin-bottom:20px; }
+.analytics-cache h3 { margin-bottom:0; }
+.analytics-cache .analytics-cards { margin-top:16px; }
+.analytics-cache .analytics-cache-result { font-size:16px; line-height:1.6; letter-spacing:0; }
+.analytics-cache meter { display:block; width:100%; height:16px; accent-color:#78b5a2; }
+.analytics-cache details { margin-top:14px; }
