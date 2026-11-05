@@ -3,12 +3,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import express from 'express';
-import { expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { VideoJobs } from './videoJobs';
 import { videoRouter } from './videoRoutes';
 import { normalizeParsedItinerary } from '../src/shared/itinerary';
 import { MusicLibrary } from './musicLibrary';
 import { createHash } from 'node:crypto';
+
+beforeEach(() => {
+  const stat = fs.statfsSync(os.tmpdir());
+  vi.spyOn(fs, 'statfsSync').mockReturnValue({ ...stat, bavail: Math.ceil(4 * 1024 ** 3 / stat.bsize) });
+});
+afterEach(() => vi.restoreAllMocks());
 
 it('serves library previews with range support without exposing full files or catalog internals', async () => {
   const directory = fs.mkdtempSync(

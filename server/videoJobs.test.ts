@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizeParsedItinerary } from '../src/shared/itinerary';
 import { VideoJobs, parseExportOptions } from './videoJobs';
 import { MusicLibrary } from './musicLibrary';
@@ -10,6 +10,13 @@ import { DatabaseSync } from 'node:sqlite';
 
 const roots: string[] = [],
   managers: VideoJobs[] = [];
+
+// These tests use tiny fake render outputs; exercise disk policy separately
+// instead of letting the CI host's unrelated files determine job outcomes.
+beforeEach(() => {
+  const stat = fs.statfsSync(os.tmpdir());
+  vi.spyOn(fs, 'statfsSync').mockReturnValue({ ...stat, bavail: Math.ceil(4 * 1024 ** 3 / stat.bsize) });
+});
 
 it('selects exact library audio for render jobs and rejects missing or short tracks', async () => {
   const directory = root(),
@@ -108,6 +115,7 @@ afterEach(async () => {
   for (const manager of managers.splice(0)) await manager.close();
   for (const directory of roots.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 it('blocks legacy overseas queue jobs, retries, fallback and prepared scene access', async () => {
@@ -415,4 +423,21 @@ it('records verified background results with real user identity and does not cou
     expect(report.recent.every(row => row.userId === 'real-user')).toBe(true);
     expect(report.recent.find(row => row.status === 'succeeded')?.details?.bytes).toBeGreaterThan(0);
   } finally { useAnalyticsStore(undefined); analytics.close(); }
+});
+
+
+it('keeps real disk-space limits for scenes and background jobs before invoking a renderer', async () => {
+  const directory = root(), runner = vi.fn(async () => {});
+  const manager = new VideoJobs(directory, runner); managers.push(manager);
+  const stat = fs.statfsSync(directory);
+  const space = (bytes: number) => vi.mocked(fs.statfsSync).mockReturnValue({ ...stat, bavail: Math.floor(bytes / stat.bsize) });
+  space(10 * 1024 ** 2);
+  for (const kind of [undefined, 'scene'] as const) {
+    try { manager.create('alice', source(), { music: 'none' }, kind); throw new Error('Expected disk limit'); }
+    catch (error) { expect(error).toMatchObject({ status: 507, message: expect.stringContaining('可用空间不足') }); }
+  }
+  space(100 * 1024 ** 2);
+  expect(manager.create('alice', source(), { music: 'none' }, 'scene').state).toBe('completed');
+  expect(() => manager.create('alice', source(), { music: 'none' })).toThrow('可用空间不足');
+  expect(runner).not.toHaveBeenCalled();
 });
